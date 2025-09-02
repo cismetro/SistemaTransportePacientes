@@ -1,9 +1,9 @@
 import os
-import sys
 from flask import Flask, render_template, redirect, url_for, flash, request, get_flashed_messages
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
+from config import config
 
 # Inicializar extensões
 db = SQLAlchemy()
@@ -22,16 +22,7 @@ class Usuario(db.Model):
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     
     def check_password(self, password):
-        try:
-            if not self.password_hash:
-                return False
-            return check_password_hash(self.password_hash, password)
-        except Exception as e:
-            print(f"Erro ao verificar senha: {e}")
-            return False
-    
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+        return check_password_hash(self.password_hash, password)
     
     @property
     def is_authenticated(self):
@@ -50,93 +41,22 @@ class Usuario(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    try:
-        return Usuario.query.get(int(user_id))
-    except:
-        return None
+    return Usuario.query.get(int(user_id))
 
-def verificar_e_criar_banco():
-    """Verifica se o banco existe e cria se necessário"""
-    basedir = os.path.abspath(os.path.dirname(__file__))
-    db_dir = os.path.join(basedir, 'db')
-    db_path = os.path.join(db_dir, 'transporte_pacientes.db')
-    
-    print(f"🔍 Verificando banco em: {db_path}")
-    
-    # Criar diretório se não existir
-    if not os.path.exists(db_dir):
-        print(f"📁 Criando diretório: {db_dir}")
-        os.makedirs(db_dir, exist_ok=True)
-    
-    # Verificar se o banco existe
-    if not os.path.exists(db_path):
-        print("❌ Banco de dados não encontrado. Criando automaticamente...")
-        criar_banco_e_usuario()
-    else:
-        print(f"✅ Banco de dados encontrado: {db_path}")
-        # Verificar se o usuário admin existe e tem hash válido
-        verificar_usuario_admin()
-    
-    return db_path
-
-def criar_banco_e_usuario():
-    """Cria o banco e o usuário administrador"""
-    try:
-        # Criar as tabelas
-        db.create_all()
-        print("✅ Tabelas criadas no banco de dados")
-        
-        # Criar usuário admin
-        admin = Usuario(
-            username='admin',
-            nome_completo='Administrador do Sistema',
-            email='admin@cosmopolis.sp.gov.br',
-            tipo_usuario='administrador',
-            ativo=True
-        )
-        admin.set_password('admin123')  # Usar o método set_password
-        
-        db.session.add(admin)
-        db.session.commit()
-        print("✅ Usuário administrador criado: admin / admin123")
-        
-    except Exception as e:
-        print(f"❌ Erro ao criar banco: {e}")
-        db.session.rollback()
-
-def verificar_usuario_admin():
-    """Verifica se o usuário admin existe e tem hash válido"""
-    try:
-        admin = Usuario.query.filter_by(username='admin').first()
-        if not admin:
-            print("❌ Usuário admin não encontrado. Criando...")
-            criar_banco_e_usuario()
-        elif not admin.password_hash or len(admin.password_hash) < 10:
-            print("❌ Hash do usuário admin inválido. Corrigindo...")
-            admin.set_password('admin123')
-            db.session.commit()
-            print("✅ Hash do usuário admin corrigido")
-        else:
-            print("✅ Usuário admin válido encontrado")
-    except Exception as e:
-        print(f"❌ Erro ao verificar usuário admin: {e}")
-
-def create_app():
-    global app
+def create_app(config_name=None):
     app = Flask(__name__)
     
-    # Configuração com caminho absoluto
-    basedir = os.path.abspath(os.path.dirname(__file__))
-    db_path = os.path.join(basedir, 'db', 'transporte_pacientes.db')
+    # Configuração
+    config_name = config_name or os.environ.get('FLASK_CONFIG') or 'default'
+    app.config.from_object(config[config_name])
     
-    app.config['SECRET_KEY'] = 'cosmopolis_sistema_transporte_2024'
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    
-    # Criar outros diretórios necessários
-    for dir_name in ['uploads', 'relatorios', 'static/css', 'static/js', 'static/img']:
-        dir_path = os.path.join(basedir, dir_name)
-        os.makedirs(dir_path, exist_ok=True)
+    # Criar diretórios necessários
+    os.makedirs('db', exist_ok=True)
+    os.makedirs('uploads', exist_ok=True)
+    os.makedirs('relatorios', exist_ok=True)
+    os.makedirs('static/css', exist_ok=True)
+    os.makedirs('static/js', exist_ok=True)
+    os.makedirs('static/img', exist_ok=True)
     
     # Inicializar extensões
     db.init_app(app)
@@ -146,10 +66,6 @@ def create_app():
     login_manager.login_view = 'login'
     login_manager.login_message = 'Por favor, faça login para acessar esta página.'
     login_manager.login_message_category = 'info'
-    
-    # Verificar e criar banco dentro do contexto da aplicação
-    with app.app_context():
-        verificar_e_criar_banco()
     
     # Rotas
     @app.route('/')
@@ -161,36 +77,17 @@ def create_app():
     @app.route('/login', methods=['GET', 'POST'])
     def login():
         if request.method == 'POST':
-            username = request.form.get('username', '').strip()
-            password = request.form.get('password', '')
+            username = request.form.get('username')
+            password = request.form.get('password')
             
-            if not username or not password:
-                flash('Por favor, preencha usuário e senha!', 'error')
-                return redirect(url_for('login'))
+            user = Usuario.query.filter_by(username=username).first()
             
-            try:
-                user = Usuario.query.filter_by(username=username).first()
-                print(f"🔍 Usuário encontrado: {user is not None}")
-                
-                if user:
-                    print(f"🔐 Verificando senha para usuário: {user.username}")
-                    print(f"🔐 Hash armazenado: {user.password_hash[:20]}..." if user.password_hash else "🔐 Hash vazio!")
-                    
-                    if user.check_password(password):
-                        login_user(user)
-                        flash('Login realizado com sucesso!', 'success')
-                        print(f"✅ Login bem-sucedido para: {user.username}")
-                        return redirect(url_for('dashboard'))
-                    else:
-                        flash('Senha incorreta!', 'error')
-                        print(f"❌ Senha incorreta para: {user.username}")
-                else:
-                    flash('Usuário não encontrado!', 'error')
-                    print(f"❌ Usuário não encontrado: {username}")
-                    
-            except Exception as e:
-                flash(f'Erro ao fazer login: {str(e)}', 'error')
-                print(f"❌ Erro de login: {e}")
+            if user and user.check_password(password):
+                login_user(user)
+                flash('Login realizado com sucesso!', 'success')
+                return redirect(url_for('dashboard'))
+            else:
+                flash('Usuário ou senha incorretos!', 'error')
         
         # Gerar alertas de mensagens flash
         messages_html = ""
@@ -232,12 +129,12 @@ def create_app():
                 <form method="POST">
                     <div class="form-group">
                         <label for="username">Usuário:</label>
-                        <input type="text" id="username" name="username" value="admin" required>
+                        <input type="text" id="username" name="username" required>
                     </div>
                     
                     <div class="form-group">
                         <label for="password">Senha:</label>
-                        <input type="password" id="password" name="password" value="admin123" required>
+                        <input type="password" id="password" name="password" required>
                     </div>
                     
                     <button type="submit" class="btn">Entrar</button>
@@ -246,8 +143,7 @@ def create_app():
                 <div class="default-info">
                     <strong>💡 Acesso Padrão:</strong><br>
                     <strong>Usuário:</strong> admin<br>
-                    <strong>Senha:</strong> admin123<br>
-                    <small>Os campos já estão preenchidos para teste</small>
+                    <strong>Senha:</strong> admin123
                 </div>
             </div>
         </body>
@@ -274,6 +170,7 @@ def create_app():
                 .menu {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }}
                 .menu-item {{ background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075); text-align: center; text-decoration: none; color: #333; transition: transform 0.3s ease; }}
                 .menu-item:hover {{ transform: translateY(-5px); }}
+                .menu-item i {{ font-size: 3rem; margin-bottom: 1rem; color: #5D5CDE; }}
                 .logout {{ background: #dc3545; color: white; padding: 0.5rem 1rem; border: none; border-radius: 0.5rem; cursor: pointer; text-decoration: none; }}
                 .logout:hover {{ background: #c82333; }}
             </style>
@@ -332,10 +229,9 @@ def create_app():
                 </div>
                 
                 <div style="margin-top: 2rem; padding: 1rem; background: #e8f5e8; border-radius: 0.5rem; border-left: 4px solid #28a745;">
-                    <h4>🎉 SISTEMA FUNCIONANDO PERFEITAMENTE!</h4>
-                    <p>✅ Banco de dados conectado com sucesso</p>
-                    <p>✅ Usuário logado: <strong>{current_user.username}</strong></p>
-                    <p>✅ Sistema pronto para produção!</p>
+                    <h4>✅ Sistema Funcionando!</h4>
+                    <p>Banco de dados conectado com sucesso. Usuário logado: <strong>{current_user.username}</strong></p>
+                    <p>Próximos passos: Implementar módulos de pacientes, veículos, motoristas e agendamentos.</p>
                 </div>
             </div>
         </body>
@@ -352,14 +248,18 @@ def create_app():
     return app
 
 if __name__ == '__main__':
-    print("🚀 Iniciando Sistema de Transporte de Pacientes...")
+    app = create_app()
     
-    try:
-        app = create_app()
-        print("📱 Acesse: http://localhost:5010")
-        print("🏥 Prefeitura Municipal de Cosmópolis")
-        print("👤 Login: admin / admin123")
-        app.run(debug=True, host='0.0.0.0', port=5010)
-    except Exception as e:
-        print(f"❌ Erro ao iniciar aplicação: {e}")
-        sys.exit(1)
+    with app.app_context():
+        # Verificar se o banco existe
+        if os.path.exists('db/transporte_pacientes.db'):
+            print("✅ Banco de dados encontrado!")
+        else:
+            print("❌ Banco de dados não encontrado. Execute: python init_db.py")
+            exit(1)
+    
+    print("🚀 Iniciando Sistema de Transporte de Pacientes...")
+    print("📱 Acesse: http://localhost:5010")
+    print("🏥 Prefeitura Municipal de Cosmópolis")
+    print("👤 Login: admin / admin123")
+    app.run(debug=True, host='0.0.0.0', port=5010)

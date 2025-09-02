@@ -299,3 +299,14 @@ Desenvolvido com ❤️ para a comunidade de Cosmópolis/SP
 Versão: 1.0.0
 Última Atualização: Dezembro 2024
 Status: Em Produção ✅
+
+
+
+🚀 Iniciando Sistema de Transporte de Pacientes...
+🔍 Verificando banco em: D:\Projetos\SistemaTransportePacientes\db\transporte_pacientes.db
+❌ Banco de dados não encontrado. Criando automaticamente...
+✅ Tabelas criadas no banco de dados
+✅ Usuário administrador criado: admin / admin123
+📱 Acesse: http://localhost:5010
+🏥 Prefeitura Municipal de Cosmópolis
+👤 Login: admin / admin123

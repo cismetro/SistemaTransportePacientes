@@ -178,7 +178,7 @@ class TestingConfig(Config):
     DEBUG = True
     
     # Banco em memória para testes
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///db/transporte_pacientes.db'
     
     # Desabilitar CSRF para testes
     WTF_CSRF_ENABLED = False
