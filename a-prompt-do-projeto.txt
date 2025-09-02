@@ -4,6 +4,13 @@ Estamos criando um sistema chamado SistemaTransportePacientes, desenvolvido para
 O sistema deve ser feito em Python (Flask) + SQLite com SQLAlchemy, pronto para migração futura para PostgreSQL ou MySQL, e rodar em produção com Waitress.
 Tudo deve ser em português, incluindo comentários, labels e mensagens do sistema.
 
+
+
+Crie um script chamado SistemaTransportePacientes.ps1 para criar a estrutura de Pastas do Projeto
+rode no pw ./SistemaTransportePacientes.ps1
+
+
+
 Estrutura de Pastas do Projeto
 SistemaTransportePacientes/
 │── app.py
@@ -151,3 +158,7 @@ Etapa 8 — Arquivos Estáticos
 Entregar apenas o próximo item da lista com código pronto para copy-paste.
 Atualize o checklist ✅ sempre que um item for entregue.
 Quando eu disser "próximo", continue para o item seguinte.
+
+
+
+No final crie um resumo do sistema, com as informações do que foi feito, acesso, como executar etc para inserir no arquivo README.md do git
