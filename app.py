@@ -139,6 +139,7 @@ class Agendamento(db.Model):
     veiculo_id = db.Column(db.Integer, db.ForeignKey('veiculos.id'))
     motorista_id = db.Column(db.Integer, db.ForeignKey('motoristas.id'))
     tipo_transporte = db.Column(db.String(30), nullable=False)
+    especialidade = db.Column(db.String(100))  # 🆕 NOVO CAMPO
     data = db.Column(db.Date, nullable=False)
     hora = db.Column(db.Time, nullable=False)
     origem = db.Column(db.Text, nullable=False)
@@ -146,7 +147,9 @@ class Agendamento(db.Model):
     observacoes = db.Column(db.Text)
     status = db.Column(db.String(20), nullable=False, default='agendado')
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
+    
+    
+    
 @login_manager.user_loader
 def load_user(user_id):
     try:
@@ -1793,6 +1796,7 @@ def create_app():
                 # Extrair dados do formulário
                 paciente_id = int(request.form.get('paciente_id', 0))
                 tipo_transporte = request.form.get('tipo_transporte', '').strip()
+                especialidade = request.form.get('especialidade', '').strip()
                 data = request.form.get('data')
                 hora = request.form.get('hora')
                 origem = request.form.get('origem', '').strip()
@@ -1814,6 +1818,7 @@ def create_app():
                 agendamento = Agendamento(
                     paciente_id=paciente_id,
                     tipo_transporte=tipo_transporte,
+                    especialidade=especialidade if especialidade else None,
                     data=data,
                     hora=hora,
                     origem=origem,
@@ -1827,6 +1832,9 @@ def create_app():
                 db.session.commit()
                 
                 print(f"✅ Agendamento criado: {agendamento.id} para {data} às {hora}")
+                if especialidade:
+                    print(f"📝 Especialidade: {especialidade}")
+                
                 flash('Agendamento criado com sucesso!', 'success')
                 return redirect(url_for('agendamentos'))
                 
@@ -1862,10 +1870,14 @@ def create_app():
         # Data de hoje no formato YYYY-MM-DD
         hoje = date.today().strftime('%Y-%m-%d')
         
+        # URLs usando caminhos diretos para evitar problemas de contexto
+        dashboard_url = "/dashboard"
+        agendamentos_url = "/agendamentos"
+        
         conteudo = f'''
         <div class="breadcrumb">
-            <a href="{url_for('dashboard')}">Dashboard</a> > 
-            <a href="{url_for('agendamentos')}">Agendamentos</a> > 
+            <a href="{dashboard_url}">Dashboard</a> > 
+            <a href="{agendamentos_url}">Agendamentos</a> > 
             Novo Agendamento
         </div>
         
@@ -1899,6 +1911,14 @@ def create_app():
                     </div>
                 </div>
                 
+                <!-- CAMPO DE ESPECIALIDADE -->
+                <div class="form-group">
+                    <label for="especialidade">Especialidade Médica</label>
+                    <div id="especialidade-container">
+                        <input type="text" id="especialidade" name="especialidade" placeholder="Para qual especialidade médica">
+                    </div>
+                </div>
+                
                 <div class="form-row">
                     <div class="form-group">
                         <label for="data">Data *</label>
@@ -1915,24 +1935,12 @@ def create_app():
                     <input type="text" id="origem" name="origem" placeholder="De onde o paciente será buscado" required>
                 </div>
                 
-                
-                <!---
-                
-                <div class="form-group">
-                    <label for="destino">Endereço de Destino *</label>
-                    <input type="text" id="destino" name="destino" placeholder="Para onde o paciente será levado" required>
-                </div>
-                
-                -->
-                
-                
                 <div class="form-group">
                     <label for="destino">Endereço de Destino *</label>
                     <div id="destino-container">
                         <input type="text" id="destino" name="destino" placeholder="Para onde o paciente será levado" required>
                     </div>
                 </div>
-                
                 
                 <div class="form-row">
                     <div class="form-group">
@@ -1958,36 +1966,37 @@ def create_app():
                 
                 <div style="margin-top: 2rem;">
                     <button type="submit" class="btn btn-success">📅 Agendar Transporte</button>
-                    <a href="{url_for('agendamentos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                    <a href="{agendamentos_url}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
                 </div>
             </form>
         </div>
         
         <script src="/static/js/cidades.js"></script>
-    <style>
-        .cidade-select {{
-            border: 2px solid var(--border-color);
-            border-radius: 0.5rem;
-            padding: 0.75rem;
-            font-size: 1rem;
-            background: white;
-            width: 100%;
-            box-sizing: border-box;
-        }}
-        
-        .cidade-select:focus {{
-            border-color: var(--input-focus);
-            outline: none;
-            box-shadow: 0 0 0 3px var(--input-focus-shadow);
-        }}
-        
-        #destino-container input {{
-            margin-top: 0.5rem;
-        }}
-    </style>
-        
+        <script src="/static/js/especialidades.js"></script>
+        <style>
+            .cidade-select, .especialidade-select {{
+                border: 2px solid var(--border-color);
+                border-radius: 0.5rem;
+                padding: 0.75rem;
+                font-size: 1rem;
+                background: white;
+                width: 100%;
+                box-sizing: border-box;
+            }}
+            
+            .cidade-select:focus, .especialidade-select:focus {{
+                border-color: var(--input-focus);
+                outline: none;
+                box-shadow: 0 0 0 3px var(--input-focus-shadow);
+            }}
+            
+            #destino-container input, #especialidade-container input {{
+                margin-top: 0.5rem;
+            }}
+        </style>
         '''
-        return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")
+        return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")    
+    
     
     # ===== RELATÓRIOS =====
     @app.route('/relatorios')
@@ -2389,12 +2398,22 @@ if __name__ == '__main__':
     print("🚀 Iniciando Sistema de Transporte de Pacientes...")
     
     try:
+        # Criar a aplicação
         app = create_app()
-        print("📱 Acesse: http://localhost:5010")
-        print("🏥 Prefeitura Municipal de Cosmópolis")
-        print("👤 Login: admin / admin123")
-        print("📊 Sistema completo com saudação corrigida!")
+        
+        # Testar contexto da aplicação
+        with app.app_context():
+            print("✅ Contexto da aplicação configurado")
+            print("📱 Acesse: http://localhost:5010")
+            print("🏥 Prefeitura Municipal de Cosmópolis")
+            print("👤 Login: admin / admin123")
+            print("🏙️ Sistema com cidades e especialidades!")
+        
+        # Executar a aplicação
         app.run(debug=True, host='0.0.0.0', port=5010)
+        
     except Exception as e:
         print(f"❌ Erro ao iniciar aplicação: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
