@@ -1,10 +1,36 @@
 import os
 import sys
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, get_flashed_messages, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
+import json
+
+# ===== FUNÇÕES DE SAUDAÇÃO =====
+def obter_saudacao():
+    """Retorna a saudação apropriada baseada no horário atual"""
+    agora = datetime.now()
+    hora = agora.hour
+    
+    if 5 <= hora < 12:
+        return "Bom dia! 🌅"
+    elif 12 <= hora < 18:
+        return "Boa tarde! ☀️"
+    else:
+        return "Boa noite! 🌙"
+
+def obter_emoji_horario():
+    """Retorna o emoji apropriado para o horário"""
+    agora = datetime.now()
+    hora = agora.hour
+    
+    if 5 <= hora < 12:
+        return "🌅"
+    elif 12 <= hora < 18:
+        return "☀️"
+    else:
+        return "🌙"
 
 # Inicializar extensões
 db = SQLAlchemy()
@@ -147,7 +173,6 @@ def verificar_e_criar_banco():
         criar_banco_e_usuario()
     else:
         print(f"✅ Banco de dados encontrado: {db_path}")
-        # Verificar se o usuário admin existe e tem hash válido
         verificar_usuario_admin()
     
     return db_path
@@ -184,15 +209,23 @@ def verificar_usuario_admin():
         if not admin:
             print("❌ Usuário admin não encontrado. Criando...")
             criar_banco_e_usuario()
-        elif not admin.password_hash or len(admin.password_hash) < 10:
-            print("❌ Hash do usuário admin inválido. Corrigindo...")
-            admin.set_password('admin123')
-            db.session.commit()
-            print("✅ Hash do usuário admin corrigido")
         else:
-            print("✅ Usuário admin válido encontrado")
+            if not admin.check_password('admin123'):
+                print("❌ Hash do usuário admin inválido. Resetando senha...")
+                admin.set_password('admin123')
+                db.session.commit()
+                print("✅ Senha do usuário admin resetada para: admin123")
+            else:
+                print("✅ Usuário admin válido encontrado")
     except Exception as e:
         print(f"❌ Erro ao verificar usuário admin: {e}")
+
+# Função para escapar strings para JavaScript
+def escape_js_string(s):
+    """Escapa uma string para uso seguro em JavaScript"""
+    if s is None:
+        return ''
+    return str(s).replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n').replace('\r', '\\r')
 
 def gerar_layout_base(titulo, conteudo, ativo=""):
     """Gera o layout base para todas as páginas"""
@@ -202,30 +235,8 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
         <title>{titulo} - Sistema de Transporte</title>
         <style>
             :root {{
-                /* Paleta de cores do sistema de saúde */
                 --color-100: #ffffff;
                 --color-95: #ebf9f9;
-                --color-90: #d8f3f2;
-                --color-85: #c4edec;
-                --color-80: #b1e7e5;
-                --color-75: #9de1df;
-                --color-70: #8adbd8;
-                --color-65: #76d5d2;
-                --color-60: #63cfcb;
-                --color-55: #4fc9c4;
-                --color-50: #3cc3bf;
-                --color-45: #36b0ac;
-                --color-40: #309c98;
-                --color-35: #2a8985;
-                --color-30: #247572;
-                --color-25: #1e625f;
-                --color-20: #184e4c;
-                --color-15: #123b39;
-                --color-10: #0c2726;
-                --color-5: #061413;
-                --color-0: #000000;
-                
-                /* Cores do template wt_health_center_free */
                 --primary-color: #4fc9c4;
                 --primary-dark: #43aca7;
                 --primary-hover: #3c9b96;
@@ -236,8 +247,6 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
                 --warning-color: #f2823c;
                 --danger-color: #e81d51;
                 --info-color: #91ceff;
-                --light-color: #2a303b;
-                --dark-color: #2a303b;
                 --gray-color: #6d7a8c;
                 --input-focus: #4fc9c4;
                 --input-focus-shadow: rgba(79, 201, 196, 0.25);
@@ -249,9 +258,9 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             .header .user-info {{ float: right; }}
             .nav {{ background: var(--color-100); padding: 0.5rem 2rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
             .nav a {{ color: var(--text-color); text-decoration: none; margin-right: 2rem; padding: 0.5rem 1rem; border-radius: 0.25rem; transition: all 0.3s ease; }}
-            .nav a:hover {{ background: var(--color-90); color: var(--primary-color); }}
+            .nav a:hover {{ background: var(--color-95); color: var(--primary-color); }}
             .nav a.active {{ background: var(--primary-color); color: var(--color-100); }}
-            .container {{ padding: 2rem; max-width: 1200px; margin: 0 auto; }}
+            .container {{ padding: 2rem; max-width: 1400px; margin: 0 auto; }}
             .page-header {{ margin-bottom: 2rem; }}
             .page-header h2 {{ color: var(--primary-color); margin: 0 0 0.5rem 0; }}
             .page-header p {{ color: var(--gray-color); margin: 0; }}
@@ -278,10 +287,37 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             .breadcrumb {{ margin-bottom: 1rem; color: var(--gray-color); }}
             .breadcrumb a {{ color: var(--primary-color); text-decoration: none; }}
             .breadcrumb a:hover {{ text-decoration: underline; }}
+            .alert {{ padding: 0.75rem; margin-bottom: 1rem; border-radius: 0.5rem; }}
+            .alert-error {{ background: rgba(232, 29, 81, 0.1); color: var(--danger-color); border: 1px solid var(--danger-color); }}
+            .alert-success {{ background: rgba(121, 178, 74, 0.1); color: var(--success-color); border: 1px solid var(--success-color); }}
+            .alert-warning {{ background: rgba(242, 130, 60, 0.1); color: var(--warning-color); border: 1px solid var(--warning-color); }}
+            
+            /* Estilos para relatórios */
+            .tabs {{ display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 2rem; }}
+            .tab {{ padding: 1rem 2rem; background: transparent; border: none; cursor: pointer; color: var(--gray-color); font-weight: 600; transition: all 0.3s ease; }}
+            .tab.active {{ color: var(--primary-color); border-bottom: 2px solid var(--primary-color); }}
+            .tab:hover {{ color: var(--primary-color); }}
+            .tab-content {{ display: none; }}
+            .tab-content.active {{ display: block; }}
+            .filters {{ background: var(--color-95); padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 2rem; }}
+            .filters-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; align-items: end; }}
+            .table-container {{ overflow-x: auto; }}
+            .report-table {{ width: 100%; border-collapse: collapse; margin-bottom: 2rem; }}
+            .report-table th {{ background: var(--primary-color); color: var(--color-100); padding: 1rem; text-align: left; }}
+            .report-table td {{ padding: 0.75rem; border-bottom: 1px solid var(--border-color); }}
+            .report-table tr:hover {{ background: var(--color-95); }}
+            .print-btn {{ background: var(--info-color); }}
+            .print-btn:hover {{ background: #7bb8ff; }}
+            
+            @media print {{
+                .no-print {{ display: none !important; }}
+                .page-header, .nav, .header, .filters {{ display: none !important; }}
+                .container {{ padding: 0; max-width: none; }}
+            }}
         </style>
     </head>
     <body>
-        <div class="header">
+        <div class="header no-print">
             <h1>🚑 Sistema de Transporte de Pacientes</h1>
             <div class="user-info">
                 Bem-vindo, {current_user.nome_completo}! 
@@ -290,12 +326,13 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             <div style="clear: both;"></div>
         </div>
         
-        <div class="nav">
+        <div class="nav no-print">
             <a href="{url_for('dashboard')}" class="{'active' if ativo == 'dashboard' else ''}">🏠 Dashboard</a>
             <a href="{url_for('pacientes')}" class="{'active' if ativo == 'pacientes' else ''}">👥 Pacientes</a>
             <a href="{url_for('veiculos')}" class="{'active' if ativo == 'veiculos' else ''}">🚗 Veículos</a>
             <a href="{url_for('motoristas')}" class="{'active' if ativo == 'motoristas' else ''}">👨‍💼 Motoristas</a>
             <a href="{url_for('agendamentos')}" class="{'active' if ativo == 'agendamentos' else ''}">📅 Agendamentos</a>
+            <a href="{url_for('relatorios')}" class="{'active' if ativo == 'relatorios' else ''}">📊 Relatórios</a>
         </div>
         
         <div class="container">
@@ -304,56 +341,6 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
     </body>
     </html>
     '''
-
-def _gerar_agendamentos_html(agendamentos_lista):
-    """Função auxiliar para gerar HTML dos agendamentos"""
-    if not agendamentos_lista:
-        return '''
-            <div class="text-center py-4">
-                <i class="bi bi-calendar-x text-muted" style="font-size: 3rem;"></i>
-                <p class="text-muted mt-3 mb-0">Nenhum agendamento para hoje</p>
-                <a href="/agendamentos/novo" class="btn btn-primary mt-2">
-                    <i class="bi bi-plus-circle me-1"></i>
-                    Criar Agendamento
-                </a>
-            </div>
-        '''
-    
-    html = ""
-    for agendamento in agendamentos_lista:
-        status_class = {
-            'confirmado': 'success',
-            'agendado': 'warning', 
-            'em_andamento': 'primary',
-            'concluido': 'secondary'
-        }.get(agendamento.status, 'secondary')
-        
-        html += f'''
-            <div class="schedule-item">
-                <div class="row align-items-center">
-                    <div class="col-md-2">
-                        <div class="schedule-time">{agendamento.hora.strftime('%H:%M')}</div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="fw-semibold">{agendamento.paciente.nome}</div>
-                        <div class="text-muted small">{agendamento.paciente.telefone}</div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="text-muted small">
-                            <strong>Destino:</strong><br>
-                            {agendamento.destino[:40]}{'...' if len(agendamento.destino) > 40 else ''}
-                        </div>
-                    </div>
-                    <div class="col-md-2">
-                        <span class="badge bg-{status_class}">
-                            {agendamento.status.replace('_', ' ').title()}
-                        </span>
-                    </div>
-                </div>
-            </div>
-        '''
-    
-    return html
 
 def create_app():
     global app
@@ -385,7 +372,7 @@ def create_app():
     with app.app_context():
         verificar_e_criar_banco()
     
-    # Rotas
+    # ===== ROTAS =====
     @app.route('/')
     def index():
         if current_user.is_authenticated:
@@ -408,7 +395,6 @@ def create_app():
                 
                 if user:
                     print(f"🔐 Verificando senha para usuário: {user.username}")
-                    print(f"🔐 Hash armazenado: {user.password_hash[:20]}..." if user.password_hash else "🔐 Hash vazio!")
                     
                     if user.check_password(password):
                         login_user(user)
@@ -504,7 +490,7 @@ def create_app():
         </html>
         '''
     
-    # ===== ROTAS DO DASHBOARD =====
+    # ===== DASHBOARD =====
     @app.route('/dashboard')
     @login_required
     def dashboard():
@@ -517,6 +503,30 @@ def create_app():
         
         # Agendamentos de hoje para exibir
         agendamentos_lista = Agendamento.query.filter_by(data=hoje).order_by(Agendamento.hora).all()
+        
+        # Preparar dados para JavaScript
+        agendamentos_js_data = []
+        for ag in agendamentos_lista:
+            status_class = {
+                'confirmado': 'success',
+                'agendado': 'warning', 
+                'em_andamento': 'primary',
+                'concluido': 'secondary'
+            }.get(ag.status, 'secondary')
+            
+            agendamentos_js_data.append({
+                'id': ag.id,
+                'horario_saida': ag.hora.strftime('%H:%M'),
+                'paciente_nome': escape_js_string(ag.paciente.nome),
+                'paciente_telefone': escape_js_string(ag.paciente.telefone),
+                'destino_nome': escape_js_string(ag.destino[:50]),
+                'status': ag.status,
+                'status_nome': escape_js_string(ag.status.replace('_', ' ').title()),
+                'status_class': status_class
+            })
+        
+        # Converter para JSON seguro
+        agendamentos_json = json.dumps(agendamentos_js_data)
         
         return f'''
         <!DOCTYPE html>
@@ -714,7 +724,7 @@ def create_app():
                 <div class="welcome-banner fade-in-up">
                     <div class="row align-items-center">
                         <div class="col-md-8">
-                            <h1 class="h3 mb-2">Bom dia! 🌅</h1>
+                            <h1 class="h3 mb-2">{obter_saudacao()}</h1>
                             <p class="mb-0 opacity-90">Sistema de Transporte de Pacientes - Cosmópolis/SP</p>
                         </div>
                         <div class="col-md-4 text-end">
@@ -818,13 +828,13 @@ def create_app():
                                         </a>
                                     </div>
                                     <div class="col-md-3 col-6">
-                                        <a href="{url_for('agendamentos')}" class="quick-action">
-                                            <i class="bi bi-calendar3"></i>
-                                            <div class="fw-semibold">Ver Agenda</div>
+                                        <a href="{url_for('relatorios')}" class="quick-action">
+                                            <i class="bi bi-file-earmark-text"></i>
+                                            <div class="fw-semibold">Relatórios</div>
                                         </a>
                                     </div>
                                     <div class="col-md-3 col-6">
-                                        <a href="#" class="quick-action" onclick="refreshDashboard()">
+                                        <a href="#" class="quick-action" onclick="refreshDashboard(); return false;">
                                             <i class="bi bi-arrow-clockwise"></i>
                                             <div class="fw-semibold">Atualizar</div>
                                         </a>
@@ -844,7 +854,7 @@ def create_app():
                             </div>
                             <div class="card-body">
                                 <div id="todaySchedule">
-                                    {_gerar_agendamentos_html(agendamentos_lista)}
+                                    <!-- Conteúdo será carregado via JavaScript -->
                                 </div>
                             </div>
                         </div>
@@ -874,6 +884,9 @@ def create_app():
                                 </a>
                                 <a href="{url_for('agendamentos')}" class="list-group-item list-group-item-action">
                                     <i class="bi bi-calendar-event me-2"></i>Agendamentos
+                                </a>
+                                <a href="{url_for('relatorios')}" class="list-group-item list-group-item-action">
+                                    <i class="bi bi-file-earmark-text me-2"></i>Relatórios
                                 </a>
                             </div>
                         </div>
@@ -910,6 +923,11 @@ def create_app():
             <!-- Scripts -->
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
             <script>
+                console.log('🚀 Dashboard carregado e pronto para atualizar!');
+                
+                // Dados iniciais dos agendamentos
+                var agendamentosIniciais = {agendamentos_json};
+                
                 // Atualizar relógio
                 function updateTime() {{
                     const now = new Date();
@@ -917,44 +935,94 @@ def create_app():
                         hour: '2-digit', 
                         minute: '2-digit' 
                     }});
-                    document.getElementById('currentTime').textContent = timeString;
-                    document.getElementById('lastUpdate').textContent = now.toLocaleTimeString('pt-BR');
+                    const timeElement = document.getElementById('currentTime');
+                    const updateElement = document.getElementById('lastUpdate');
+                    
+                    if (timeElement) timeElement.textContent = timeString;
+                    if (updateElement) updateElement.textContent = now.toLocaleTimeString('pt-BR');
                 }}
                 
                 // Refresh automático dos dados
                 function refreshDashboard() {{
+                    console.log('🔄 Atualizando dashboard...');
+                    
                     fetch('/dashboard_api')
-                        .then(response => response.json())
+                        .then(response => {{
+                            console.log('📡 Resposta recebida:', response.status);
+                            if (!response.ok) {{
+                                throw new Error('HTTP error! status: ' + response.status);
+                            }}
+                            return response.json();
+                        }})
                         .then(data => {{
-                            // Atualizar contadores
-                            document.getElementById('agendamentosHoje').textContent = data.stats.agendamentos_hoje;
-                            document.getElementById('pacientesAtivos').textContent = data.stats.pacientes_ativos;
-                            document.getElementById('motoristasDisponiveis').textContent = data.stats.motoristas_disponiveis;
-                            document.getElementById('veiculosDisponiveis').textContent = data.stats.veiculos_disponiveis;
+                            console.log('📊 Dados recebidos:', data);
+                            
+                            // Atualizar contadores com animação
+                            const stats = data.stats;
+                            if (stats) {{
+                                animateCounter('agendamentosHoje', stats.agendamentos_hoje);
+                                animateCounter('pacientesAtivos', stats.pacientes_ativos);
+                                animateCounter('motoristasDisponiveis', stats.motoristas_disponiveis);
+                                animateCounter('veiculosDisponiveis', stats.veiculos_disponiveis);
+                            }}
                             
                             // Atualizar agendamentos
                             updateTodaySchedule(data.agendamentos_hoje);
                             
                             // Atualizar timestamp
                             updateTime();
+                            
+                            console.log('✅ Dashboard atualizado com sucesso!');
                         }})
-                        .catch(error => console.error('Erro ao atualizar:', error));
+                        .catch(error => {{
+                            console.error('❌ Erro ao atualizar dashboard:', error);
+                        }});
+                }}
+                
+                // Animação dos contadores
+                function animateCounter(elementId, newValue) {{
+                    const element = document.getElementById(elementId);
+                    if (!element) return;
+                    
+                    const currentValue = parseInt(element.textContent) || 0;
+                    if (currentValue === newValue) return;
+                    
+                    const duration = 1000;
+                    const steps = 20;
+                    const stepTime = duration / steps;
+                    const stepValue = (newValue - currentValue) / steps;
+                    
+                    let step = 0;
+                    const timer = setInterval(function() {{
+                        step++;
+                        const value = Math.round(currentValue + (stepValue * step));
+                        element.textContent = value;
+                        
+                        if (step >= steps) {{
+                            clearInterval(timer);
+                            element.textContent = newValue;
+                        }}
+                    }}, stepTime);
                 }}
                 
                 function updateTodaySchedule(agendamentos) {{
                     const container = document.getElementById('todaySchedule');
+                    if (!container) return;
+                    
+                    console.log('📅 Atualizando agendamentos:', agendamentos);
+                    
                     if (!agendamentos || agendamentos.length === 0) {{
-                        container.innerHTML = `
-                            <div class="text-center py-4">
-                                <i class="bi bi-calendar-x text-muted" style="font-size: 3rem;"></i>
-                                <p class="text-muted mt-3 mb-0">Nenhum agendamento para hoje</p>
-                            </div>
-                        `;
+                        container.innerHTML = '<div class="text-center py-4">' +
+                            '<i class="bi bi-calendar-x text-muted" style="font-size: 3rem;"></i>' +
+                            '<p class="text-muted mt-3 mb-0">Nenhum agendamento para hoje</p>' +
+                            '<a href="{url_for('agendamentos_novo')}" class="btn btn-primary mt-2">' +
+                            '<i class="bi bi-plus-circle me-1"></i> Criar Agendamento</a>' +
+                            '</div>';
                         return;
                     }}
                     
-                    let html = '';
-                    agendamentos.forEach(ag => {{
+                    var html = '';
+                    agendamentos.forEach(function(ag) {{
                         const statusClass = {{
                             'confirmado': 'success',
                             'agendado': 'warning',
@@ -962,41 +1030,49 @@ def create_app():
                             'concluido': 'secondary'
                         }}[ag.status] || 'secondary';
                         
-                        html += `
-                            <div class="schedule-item">
-                                <div class="row align-items-center">
-                                    <div class="col-md-2">
-                                        <div class="schedule-time">${{ag.horario_saida}}</div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="fw-semibold">${{ag.paciente_nome}}</div>
-                                        <div class="text-muted small">${{ag.paciente_telefone}}</div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="text-muted small">
-                                            <strong>Destino:</strong><br>
-                                            ${{ag.destino_nome}}
-                                        </div>
-                                    </div>
-                                    <div class="col-md-2">
-                                        <span class="badge bg-${{statusClass}}">
-                                            ${{ag.status_nome}}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
+                        html += '<div class="schedule-item">' +
+                            '<div class="row align-items-center">' +
+                            '<div class="col-md-2">' +
+                            '<div class="schedule-time">' + ag.horario_saida + '</div>' +
+                            '</div>' +
+                            '<div class="col-md-4">' +
+                            '<div class="fw-semibold">' + ag.paciente_nome + '</div>' +
+                            '<div class="text-muted small">' + ag.paciente_telefone + '</div>' +
+                            '</div>' +
+                            '<div class="col-md-4">' +
+                            '<div class="text-muted small">' +
+                            '<strong>Destino:</strong><br>' + ag.destino_nome +
+                            '</div>' +
+                            '</div>' +
+                            '<div class="col-md-2">' +
+                            '<span class="badge bg-' + statusClass + '">' + ag.status_nome + '</span>' +
+                            '</div>' +
+                            '</div>' +
+                            '</div>';
                     }});
                     
                     container.innerHTML = html;
                 }}
                 
-                // Atualizar a cada minuto
-                updateTime();
-                setInterval(updateTime, 60000);
-                
-                // Refresh automático a cada 5 minutos
-                setInterval(refreshDashboard, 5 * 60 * 1000);
+                // Inicializar
+                document.addEventListener('DOMContentLoaded', function() {{
+                    console.log('📱 DOM carregado - inicializando dashboard');
+                    
+                    // Carregar agendamentos iniciais
+                    updateTodaySchedule(agendamentosIniciais);
+                    
+                    // Atualizar a cada minuto
+                    updateTime();
+                    setInterval(updateTime, 60000);
+                    
+                    // Refresh automático a cada 2 minutos
+                    setInterval(refreshDashboard, 2 * 60 * 1000);
+                    
+                    // Primeira atualização após 3 segundos
+                    setTimeout(refreshDashboard, 3000);
+                    
+                    console.log('✅ Dashboard inicializado com sucesso!');
+                }});
             </script>
             
         </body>
@@ -1006,64 +1082,102 @@ def create_app():
     @app.route('/dashboard_api')
     @login_required
     def dashboard_api():
-        # Buscar dados reais do banco
-        hoje = date.today()
-        
-        stats = {
-            'agendamentos_hoje': Agendamento.query.filter_by(data=hoje).count(),
-            'pacientes_ativos': Paciente.query.filter_by(ativo=True).count(),
-            'motoristas_disponiveis': Motorista.query.filter_by(status='ativo').count(),
-            'veiculos_disponiveis': Veiculo.query.filter_by(ativo=True).count()
-        }
-        
-        # Agendamentos de hoje
-        agendamentos_hoje = []
-        agendamentos = Agendamento.query.filter_by(data=hoje).order_by(Agendamento.hora).all()
-        
-        for ag in agendamentos:
-            agendamentos_hoje.append({
-                'id': ag.id,
-                'horario_saida': ag.hora.strftime('%H:%M'),
-                'paciente_nome': ag.paciente.nome,
-                'paciente_telefone': ag.paciente.telefone,
-                'destino_nome': ag.destino[:50],
-                'status': ag.status,
-                'status_nome': ag.status.replace('_', ' ').title()
-            })
-        
-        return jsonify({
-            'stats': stats,
-            'agendamentos_hoje': agendamentos_hoje
-        })
+        try:
+            print("🔄 API Dashboard chamada!")
+            
+            # Buscar dados reais do banco
+            hoje = date.today()
+            
+            stats = {
+                'agendamentos_hoje': Agendamento.query.filter_by(data=hoje).count(),
+                'pacientes_ativos': Paciente.query.filter_by(ativo=True).count(),
+                'motoristas_disponiveis': Motorista.query.filter_by(status='ativo').count(),
+                'veiculos_disponiveis': Veiculo.query.filter_by(ativo=True).count()
+            }
+            
+            print(f"📊 Stats calculadas: {stats}")
+            
+            # Agendamentos de hoje
+            agendamentos_hoje = []
+            agendamentos = Agendamento.query.filter_by(data=hoje).order_by(Agendamento.hora).all()
+            
+            for ag in agendamentos:
+                agendamentos_hoje.append({
+                    'id': ag.id,
+                    'horario_saida': ag.hora.strftime('%H:%M'),
+                    'paciente_nome': ag.paciente.nome,
+                    'paciente_telefone': ag.paciente.telefone,
+                    'destino_nome': ag.destino[:50],
+                    'status': ag.status,
+                    'status_nome': ag.status.replace('_', ' ').title()
+                })
+            
+            print(f"📅 Agendamentos encontrados: {len(agendamentos_hoje)}")
+            
+            response_data = {
+                'stats': stats,
+                'agendamentos_hoje': agendamentos_hoje,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            print("✅ API Dashboard respondendo com sucesso!")
+            return jsonify(response_data)
+            
+        except Exception as e:
+            print(f"❌ Erro na API Dashboard: {e}")
+            return jsonify({'error': str(e)}), 500
     
-    # ===== ROTAS DE PACIENTES =====
+    # ===== PACIENTES =====
     @app.route('/pacientes')
     @login_required
     def pacientes():
-        conteudo = '''
+        pacientes_lista = Paciente.query.filter_by(ativo=True).order_by(Paciente.data_cadastro.desc()).all()
+        
+        pacientes_html = ""
+        if pacientes_lista:
+            pacientes_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📋 Pacientes Cadastrados</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">CPF</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Telefone</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data Cadastro</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for paciente in pacientes_lista:
+                pacientes_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.nome}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.cpf}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.telefone}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.data_cadastro.strftime('%d/%m/%Y')}</td>
+                            </tr>
+                '''
+            pacientes_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
         <div class="page-header">
             <h2>👥 Gerenciamento de Pacientes</h2>
             <p>Cadastro e controle de pacientes do sistema de transporte</p>
-        </div>
-        
-        <div class="card">
-            <div class="coming-soon">
-                <div class="icon">👥</div>
-                <h3>Módulo de Pacientes</h3>
-                <p>Este módulo está em desenvolvimento e incluirá:</p>
-                <ul style="text-align: left; display: inline-block; margin-top: 1rem;">
-                    <li>✅ Cadastro de pacientes</li>
-                    <li>✅ Histórico médico</li>
-                    <li>✅ Dados de contato</li>
-                    <li>✅ Necessidades especiais</li>
-                    <li>✅ Relatórios de atendimento</li>
-                </ul>
-                <div style="margin-top: 2rem;">
-                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
-                    <a href="''' + url_for('pacientes_cadastrar') + '''" class="btn btn-secondary" style="margin-left: 1rem;">📋 Cadastrar Paciente</a>
-                </div>
+            <div style="margin-top: 1rem;">
+                <a href="{url_for('pacientes_cadastrar')}" class="btn">📋 Cadastrar Novo Paciente</a>
             </div>
         </div>
+        
+        {pacientes_html}
+        
+        {f'<div class="card"><div class="coming-soon"><div class="icon">👥</div><h3>Nenhum paciente cadastrado</h3><p>Comece cadastrando o primeiro paciente do sistema!</p></div></div>' if not pacientes_lista else ''}
         '''
         return gerar_layout_base("Pacientes", conteudo, "pacientes")
     
@@ -1071,13 +1185,63 @@ def create_app():
     @login_required
     def pacientes_cadastrar():
         if request.method == 'POST':
-            flash('Funcionalidade em desenvolvimento! Cadastro será implementado em breve.', 'warning')
-            return redirect(url_for('pacientes'))
+            try:
+                # Extrair dados do formulário
+                nome = request.form.get('nome', '').strip()
+                cpf = request.form.get('cpf', '').strip()
+                telefone = request.form.get('telefone', '').strip()
+                data_nascimento = request.form.get('data_nascimento')
+                endereco = request.form.get('endereco', '').strip()
+                cep = request.form.get('cep', '').strip()
+                cartao_sus = request.form.get('cartao_sus', '').strip()
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([nome, cpf, telefone, data_nascimento, endereco]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('pacientes_cadastrar'))
+                
+                # Verificar se CPF já existe
+                if Paciente.query.filter_by(cpf=cpf).first():
+                    flash('CPF já cadastrado no sistema!', 'error')
+                    return redirect(url_for('pacientes_cadastrar'))
+                
+                # Converter data
+                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
+                
+                # Criar novo paciente
+                paciente = Paciente(
+                    nome=nome,
+                    cpf=cpf,
+                    telefone=telefone,
+                    data_nascimento=data_nascimento,
+                    endereco=endereco,
+                    cep=cep if cep else None,
+                    cartao_sus=cartao_sus if cartao_sus else None,
+                    observacoes=observacoes if observacoes else None
+                )
+                
+                db.session.add(paciente)
+                db.session.commit()
+                
+                flash(f'Paciente "{nome}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('pacientes'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao cadastrar paciente: {str(e)}', 'error')
+                print(f"❌ Erro ao cadastrar paciente: {e}")
         
-        conteudo = '''
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
         <div class="breadcrumb">
-            <a href="''' + url_for('dashboard') + '''">Dashboard</a> > 
-            <a href="''' + url_for('pacientes') + '''">Pacientes</a> > 
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('pacientes')}">Pacientes</a> > 
             Cadastrar Novo Paciente
         </div>
         
@@ -1085,6 +1249,8 @@ def create_app():
             <h2>📋 Cadastrar Novo Paciente</h2>
             <p>Preencha os dados do paciente que será atendido pelo sistema de transporte</p>
         </div>
+        
+        {messages_html}
         
         <div class="card">
             <form method="POST">
@@ -1095,14 +1261,14 @@ def create_app():
                     </div>
                     <div class="form-group">
                         <label for="cpf">CPF *</label>
-                        <input type="text" id="cpf" name="cpf" required>
+                        <input type="text" id="cpf" name="cpf" placeholder="000.000.000-00" required>
                     </div>
                 </div>
                 
                 <div class="form-row">
                     <div class="form-group">
                         <label for="telefone">Telefone *</label>
-                        <input type="tel" id="telefone" name="telefone" required>
+                        <input type="tel" id="telefone" name="telefone" placeholder="(00) 00000-0000" required>
                     </div>
                     <div class="form-group">
                         <label for="data_nascimento">Data de Nascimento *</label>
@@ -1112,17 +1278,17 @@ def create_app():
                 
                 <div class="form-group">
                     <label for="endereco">Endereço Completo *</label>
-                    <input type="text" id="endereco" name="endereco" required>
+                    <input type="text" id="endereco" name="endereco" placeholder="Rua, número, bairro, cidade" required>
                 </div>
                 
                 <div class="form-row">
                     <div class="form-group">
                         <label for="cep">CEP</label>
-                        <input type="text" id="cep" name="cep">
+                        <input type="text" id="cep" name="cep" placeholder="00000-000">
                     </div>
                     <div class="form-group">
                         <label for="cartao_sus">Cartão SUS</label>
-                        <input type="text" id="cartao_sus" name="cartao_sus">
+                        <input type="text" id="cartao_sus" name="cartao_sus" placeholder="000 0000 0000 0000">
                     </div>
                 </div>
                 
@@ -1133,41 +1299,66 @@ def create_app():
                 
                 <div style="margin-top: 2rem;">
                     <button type="submit" class="btn btn-success">💾 Salvar Paciente</button>
-                    <a href="''' + url_for('pacientes') + '''" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                    <a href="{url_for('pacientes')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
                 </div>
             </form>
         </div>
         '''
         return gerar_layout_base("Cadastrar Paciente", conteudo, "pacientes")
     
-    # ===== ROTAS DE VEÍCULOS =====
+    # ===== VEÍCULOS =====
     @app.route('/veiculos')
     @login_required
     def veiculos():
-        conteudo = '''
+        veiculos_lista = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.data_cadastro.desc()).all()
+        
+        veiculos_html = ""
+        if veiculos_lista:
+            veiculos_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">🚗 Veículos Cadastrados</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Placa</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Marca/Modelo</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ano</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Adaptado PCD</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for veiculo in veiculos_lista:
+                veiculos_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.placa}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.marca} {veiculo.modelo}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.tipo.replace('_', ' ').title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.ano}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{'✅ Sim' if veiculo.adaptado else '❌ Não'}</td>
+                            </tr>
+                '''
+            veiculos_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
         <div class="page-header">
             <h2>🚗 Gerenciamento de Veículos</h2>
             <p>Controle da frota municipal de transporte de pacientes</p>
-        </div>
-        
-        <div class="card">
-            <div class="coming-soon">
-                <div class="icon">🚗</div>
-                <h3>Módulo de Veículos</h3>
-                <p>Este módulo está em desenvolvimento e incluirá:</p>
-                <ul style="text-align: left; display: inline-block; margin-top: 1rem;">
-                    <li>✅ Cadastro de veículos</li>
-                    <li>✅ Controle de manutenção</li>
-                    <li>✅ Documentação</li>
-                    <li>✅ Quilometragem</li>
-                    <li>✅ Agendamento de uso</li>
-                </ul>
-                <div style="margin-top: 2rem;">
-                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
-                    <a href="''' + url_for('veiculos_cadastrar') + '''" class="btn btn-secondary" style="margin-left: 1rem;">🚗 Cadastrar Veículo</a>
-                </div>
+            <div style="margin-top: 1rem;">
+                <a href="{url_for('veiculos_cadastrar')}" class="btn">🚗 Cadastrar Novo Veículo</a>
             </div>
         </div>
+        
+        {veiculos_html}
+        
+        {f'<div class="card"><div class="coming-soon"><div class="icon">🚗</div><h3>Nenhum veículo cadastrado</h3><p>Comece cadastrando o primeiro veículo da frota!</p></div></div>' if not veiculos_lista else ''}
         '''
         return gerar_layout_base("Veículos", conteudo, "veiculos")
     
@@ -1175,13 +1366,62 @@ def create_app():
     @login_required
     def veiculos_cadastrar():
         if request.method == 'POST':
-            flash('Funcionalidade em desenvolvimento! Cadastro será implementado em breve.', 'warning')
-            return redirect(url_for('veiculos'))
+            try:
+                # Extrair dados do formulário
+                placa = request.form.get('placa', '').strip().upper()
+                marca = request.form.get('marca', '').strip()
+                modelo = request.form.get('modelo', '').strip()
+                ano = int(request.form.get('ano', 0))
+                cor = request.form.get('cor', '').strip()
+                tipo = request.form.get('tipo', '').strip()
+                capacidade = request.form.get('capacidade')
+                adaptado = request.form.get('adaptado') == 'sim'
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([placa, marca, modelo, ano, tipo]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('veiculos_cadastrar'))
+                
+                # Verificar se placa já existe
+                if Veiculo.query.filter_by(placa=placa).first():
+                    flash('Placa já cadastrada no sistema!', 'error')
+                    return redirect(url_for('veiculos_cadastrar'))
+                
+                # Criar novo veículo
+                veiculo = Veiculo(
+                    placa=placa,
+                    marca=marca,
+                    modelo=modelo,
+                    ano=ano,
+                    cor=cor if cor else None,
+                    tipo=tipo,
+                    capacidade=int(capacidade) if capacidade else None,
+                    adaptado=adaptado,
+                    observacoes=observacoes if observacoes else None
+                )
+                
+                db.session.add(veiculo)
+                db.session.commit()
+                
+                flash(f'Veículo "{placa}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('veiculos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao cadastrar veículo: {str(e)}', 'error')
+                print(f"❌ Erro ao cadastrar veículo: {e}")
         
-        conteudo = '''
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
         <div class="breadcrumb">
-            <a href="''' + url_for('dashboard') + '''">Dashboard</a> > 
-            <a href="''' + url_for('veiculos') + '''">Veículos</a> > 
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('veiculos')}">Veículos</a> > 
             Cadastrar Novo Veículo
         </div>
         
@@ -1190,12 +1430,14 @@ def create_app():
             <p>Registre um novo veículo na frota municipal</p>
         </div>
         
+        {messages_html}
+        
         <div class="card">
             <form method="POST">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="placa">Placa *</label>
-                        <input type="text" id="placa" name="placa" placeholder="ABC-1234" required>
+                        <input type="text" id="placa" name="placa" placeholder="ABC-1234" required style="text-transform: uppercase;">
                     </div>
                     <div class="form-group">
                         <label for="marca">Marca *</label>
@@ -1252,41 +1494,73 @@ def create_app():
                 
                 <div style="margin-top: 2rem;">
                     <button type="submit" class="btn btn-success">💾 Salvar Veículo</button>
-                    <a href="''' + url_for('veiculos') + '''" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                    <a href="{url_for('veiculos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
                 </div>
             </form>
         </div>
         '''
         return gerar_layout_base("Cadastrar Veículo", conteudo, "veiculos")
     
-    # ===== ROTAS DE MOTORISTAS =====
+    # ===== MOTORISTAS =====
     @app.route('/motoristas')
     @login_required
     def motoristas():
-        conteudo = '''
+        motoristas_lista = Motorista.query.order_by(Motorista.data_cadastro.desc()).all()
+        
+        motoristas_html = ""
+        if motoristas_lista:
+            motoristas_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👨‍💼 Motoristas Cadastrados</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">CNH</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Categoria</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Vencimento CNH</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for motorista in motoristas_lista:
+                status_color = {
+                    'ativo': 'color: var(--success-color);',
+                    'inativo': 'color: var(--gray-color);',
+                    'ferias': 'color: var(--warning-color);',
+                    'licenca': 'color: var(--info-color);'
+                }.get(motorista.status, '')
+                
+                motoristas_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.nome}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.cnh}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.categoria_cnh}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{motorista.status.title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.vencimento_cnh.strftime('%d/%m/%Y')}</td>
+                            </tr>
+                '''
+            motoristas_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
         <div class="page-header">
             <h2>👨‍💼 Gerenciamento de Motoristas</h2>
             <p>Cadastro e controle dos motoristas do sistema</p>
-        </div>
-        
-        <div class="card">
-            <div class="coming-soon">
-                <div class="icon">👨‍💼</div>
-                <h3>Módulo de Motoristas</h3>
-                <p>Este módulo está em desenvolvimento e incluirá:</p>
-                <ul style="text-align: left; display: inline-block; margin-top: 1rem;">
-                    <li>✅ Cadastro de motoristas</li>
-                    <li>✅ Controle de CNH</li>
-                    <li>✅ Escalas de trabalho</li>
-                    <li>✅ Histórico de viagens</li>
-                    <li>✅ Avaliações</li>
-                </ul>
-                <div style="margin-top: 2rem;">
-                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
-                    <a href="''' + url_for('motoristas_cadastrar') + '''" class="btn btn-secondary" style="margin-left: 1rem;">👨‍💼 Cadastrar Motorista</a>
-                </div>
+            <div style="margin-top: 1rem;">
+                <a href="{url_for('motoristas_cadastrar')}" class="btn">👨‍💼 Cadastrar Novo Motorista</a>
             </div>
         </div>
+        
+        {motoristas_html}
+        
+        {f'<div class="card"><div class="coming-soon"><div class="icon">👨‍💼</div><h3>Nenhum motorista cadastrado</h3><p>Comece cadastrando o primeiro motorista!</p></div></div>' if not motoristas_lista else ''}
         '''
         return gerar_layout_base("Motoristas", conteudo, "motoristas")
     
@@ -1294,13 +1568,72 @@ def create_app():
     @login_required
     def motoristas_cadastrar():
         if request.method == 'POST':
-            flash('Funcionalidade em desenvolvimento! Cadastro será implementado em breve.', 'warning')
-            return redirect(url_for('motoristas'))
+            try:
+                # Extrair dados do formulário
+                nome = request.form.get('nome', '').strip()
+                cpf = request.form.get('cpf', '').strip()
+                telefone = request.form.get('telefone', '').strip()
+                data_nascimento = request.form.get('data_nascimento')
+                cnh = request.form.get('cnh', '').strip()
+                categoria_cnh = request.form.get('categoria_cnh', '').strip()
+                vencimento_cnh = request.form.get('vencimento_cnh')
+                endereco = request.form.get('endereco', '').strip()
+                status = request.form.get('status', 'ativo').strip()
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([nome, cpf, telefone, data_nascimento, cnh, categoria_cnh, vencimento_cnh]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('motoristas_cadastrar'))
+                
+                # Verificar se CPF ou CNH já existem
+                if Motorista.query.filter_by(cpf=cpf).first():
+                    flash('CPF já cadastrado no sistema!', 'error')
+                    return redirect(url_for('motoristas_cadastrar'))
+                
+                if Motorista.query.filter_by(cnh=cnh).first():
+                    flash('CNH já cadastrada no sistema!', 'error')
+                    return redirect(url_for('motoristas_cadastrar'))
+                
+                # Converter datas
+                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
+                vencimento_cnh = datetime.strptime(vencimento_cnh, '%Y-%m-%d').date()
+                
+                # Criar novo motorista
+                motorista = Motorista(
+                    nome=nome,
+                    cpf=cpf,
+                    telefone=telefone,
+                    data_nascimento=data_nascimento,
+                    cnh=cnh,
+                    categoria_cnh=categoria_cnh,
+                    vencimento_cnh=vencimento_cnh,
+                    endereco=endereco if endereco else None,
+                    status=status,
+                    observacoes=observacoes if observacoes else None
+                )
+                
+                db.session.add(motorista)
+                db.session.commit()
+                
+                flash(f'Motorista "{nome}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('motoristas'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao cadastrar motorista: {str(e)}', 'error')
+                print(f"❌ Erro ao cadastrar motorista: {e}")
         
-        conteudo = '''
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
         <div class="breadcrumb">
-            <a href="''' + url_for('dashboard') + '''">Dashboard</a> > 
-            <a href="''' + url_for('motoristas') + '''">Motoristas</a> > 
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('motoristas')}">Motoristas</a> > 
             Cadastrar Novo Motorista
         </div>
         
@@ -1308,6 +1641,8 @@ def create_app():
             <h2>👨‍💼 Cadastrar Novo Motorista</h2>
             <p>Registre um novo motorista no sistema</p>
         </div>
+        
+        {messages_html}
         
         <div class="card">
             <form method="POST">
@@ -1318,14 +1653,14 @@ def create_app():
                     </div>
                     <div class="form-group">
                         <label for="cpf">CPF *</label>
-                        <input type="text" id="cpf" name="cpf" required>
+                        <input type="text" id="cpf" name="cpf" placeholder="000.000.000-00" required>
                     </div>
                 </div>
                 
                 <div class="form-row">
                     <div class="form-group">
                         <label for="telefone">Telefone *</label>
-                        <input type="tel" id="telefone" name="telefone" required>
+                        <input type="tel" id="telefone" name="telefone" placeholder="(00) 00000-0000" required>
                     </div>
                     <div class="form-group">
                         <label for="data_nascimento">Data de Nascimento *</label>
@@ -1379,41 +1714,74 @@ def create_app():
                 
                 <div style="margin-top: 2rem;">
                     <button type="submit" class="btn btn-success">💾 Salvar Motorista</button>
-                    <a href="''' + url_for('motoristas') + '''" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                    <a href="{url_for('motoristas')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
                 </div>
             </form>
         </div>
         '''
         return gerar_layout_base("Cadastrar Motorista", conteudo, "motoristas")
     
-    # ===== ROTAS DE AGENDAMENTOS =====
+    # ===== AGENDAMENTOS =====
     @app.route('/agendamentos')
     @login_required
     def agendamentos():
-        conteudo = '''
+        agendamentos_lista = Agendamento.query.order_by(Agendamento.data.desc(), Agendamento.hora.desc()).all()
+        
+        agendamentos_html = ""
+        if agendamentos_lista:
+            agendamentos_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📅 Agendamentos</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data/Hora</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Paciente</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Origem → Destino</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for agendamento in agendamentos_lista:
+                status_color = {
+                    'agendado': 'color: var(--warning-color);',
+                    'confirmado': 'color: var(--info-color);',
+                    'em_andamento': 'color: var(--primary-color);',
+                    'concluido': 'color: var(--success-color);',
+                    'cancelado': 'color: var(--danger-color);'
+                }.get(agendamento.status, '')
+                
+                agendamentos_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.data.strftime('%d/%m/%Y')} às {agendamento.hora.strftime('%H:%M')}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.paciente.nome}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.tipo_transporte.title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); font-size: 0.875rem;">{agendamento.origem[:30]}{'...' if len(agendamento.origem) > 30 else ''} → {agendamento.destino[:30]}{'...' if len(agendamento.destino) > 30 else ''}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{agendamento.status.replace('_', ' ').title()}</td>
+                            </tr>
+                '''
+            agendamentos_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
         <div class="page-header">
             <h2>📅 Gerenciamento de Agendamentos</h2>
             <p>Programação e controle de transportes de pacientes</p>
-        </div>
-        
-        <div class="card">
-            <div class="coming-soon">
-                <div class="icon">📅</div>
-                <h3>Módulo de Agendamentos</h3>
-                <p>Este módulo está em desenvolvimento e incluirá:</p>
-                <ul style="text-align: left; display: inline-block; margin-top: 1rem;">
-                    <li>✅ Agendamento de transportes</li>
-                    <li>✅ Calendário de viagens</li>
-                    <li>✅ Notificações</li>
-                    <li>✅ Status em tempo real</li>
-                    <li>✅ Relatórios de uso</li>
-                </ul>
-                <div style="margin-top: 2rem;">
-                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
-                    <a href="''' + url_for('agendamentos_novo') + '''" class="btn btn-secondary" style="margin-left: 1rem;">📅 Novo Agendamento</a>
-                </div>
+            <div style="margin-top: 1rem;">
+                <a href="{url_for('agendamentos_novo')}" class="btn">📅 Novo Agendamento</a>
             </div>
         </div>
+        
+        {agendamentos_html}
+        
+        {f'<div class="card"><div class="coming-soon"><div class="icon">📅</div><h3>Nenhum agendamento criado</h3><p>Comece criando o primeiro agendamento!</p></div></div>' if not agendamentos_lista else ''}
         '''
         return gerar_layout_base("Agendamentos", conteudo, "agendamentos")
     
@@ -1421,13 +1789,83 @@ def create_app():
     @login_required
     def agendamentos_novo():
         if request.method == 'POST':
-            flash('Funcionalidade em desenvolvimento! Agendamento será implementado em breve.', 'warning')
-            return redirect(url_for('agendamentos'))
+            try:
+                # Extrair dados do formulário
+                paciente_id = int(request.form.get('paciente_id', 0))
+                tipo_transporte = request.form.get('tipo_transporte', '').strip()
+                data = request.form.get('data')
+                hora = request.form.get('hora')
+                origem = request.form.get('origem', '').strip()
+                destino = request.form.get('destino', '').strip()
+                veiculo_id = request.form.get('veiculo_id')
+                motorista_id = request.form.get('motorista_id')
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([paciente_id, tipo_transporte, data, hora, origem, destino]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('agendamentos_novo'))
+                
+                # Converter data e hora
+                data = datetime.strptime(data, '%Y-%m-%d').date()
+                hora = datetime.strptime(hora, '%H:%M').time()
+                
+                # Criar novo agendamento
+                agendamento = Agendamento(
+                    paciente_id=paciente_id,
+                    tipo_transporte=tipo_transporte,
+                    data=data,
+                    hora=hora,
+                    origem=origem,
+                    destino=destino,
+                    veiculo_id=int(veiculo_id) if veiculo_id else None,
+                    motorista_id=int(motorista_id) if motorista_id else None,
+                    observacoes=observacoes if observacoes else None
+                )
+                
+                db.session.add(agendamento)
+                db.session.commit()
+                
+                print(f"✅ Agendamento criado: {agendamento.id} para {data} às {hora}")
+                flash('Agendamento criado com sucesso!', 'success')
+                return redirect(url_for('agendamentos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao criar agendamento: {str(e)}', 'error')
+                print(f"❌ Erro ao criar agendamento: {e}")
         
-        conteudo = '''
+        # Buscar dados para os selects
+        pacientes = Paciente.query.filter_by(ativo=True).order_by(Paciente.nome).all()
+        veiculos = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.placa).all()
+        motoristas = Motorista.query.filter_by(status='ativo').order_by(Motorista.nome).all()
+        
+        # Gerar options para os selects
+        pacientes_options = ""
+        for p in pacientes:
+            pacientes_options += f'<option value="{p.id}">{p.nome} - CPF: {p.cpf}</option>'
+        
+        veiculos_options = ""
+        for v in veiculos:
+            veiculos_options += f'<option value="{v.id}">{v.marca} {v.modelo} - {v.placa}</option>'
+        
+        motoristas_options = ""
+        for m in motoristas:
+            motoristas_options += f'<option value="{m.id}">{m.nome} - CNH: {m.categoria_cnh}</option>'
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        # Data de hoje no formato YYYY-MM-DD
+        hoje = date.today().strftime('%Y-%m-%d')
+        
+        conteudo = f'''
         <div class="breadcrumb">
-            <a href="''' + url_for('dashboard') + '''">Dashboard</a> > 
-            <a href="''' + url_for('agendamentos') + '''">Agendamentos</a> > 
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('agendamentos')}">Agendamentos</a> > 
             Novo Agendamento
         </div>
         
@@ -1436,15 +1874,16 @@ def create_app():
             <p>Agende um novo transporte de paciente</p>
         </div>
         
+        {messages_html}
+        
         <div class="card">
             <form method="POST">
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="paciente">Paciente *</label>
-                        <select id="paciente" name="paciente" required>
+                        <label for="paciente_id">Paciente *</label>
+                        <select id="paciente_id" name="paciente_id" required>
                             <option value="">Selecione o paciente...</option>
-                            <option value="1">João Silva - CPF: 123.456.789-00</option>
-                            <option value="2">Maria Santos - CPF: 987.654.321-00</option>
+                            {pacientes_options}
                         </select>
                     </div>
                     <div class="form-group">
@@ -1463,7 +1902,7 @@ def create_app():
                 <div class="form-row">
                     <div class="form-group">
                         <label for="data">Data *</label>
-                        <input type="date" id="data" name="data" required>
+                        <input type="date" id="data" name="data" value="{hoje}" required>
                     </div>
                     <div class="form-group">
                         <label for="hora">Hora *</label>
@@ -1483,19 +1922,17 @@ def create_app():
                 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="veiculo">Veículo</label>
-                        <select id="veiculo" name="veiculo">
+                        <label for="veiculo_id">Veículo</label>
+                        <select id="veiculo_id" name="veiculo_id">
                             <option value="">Sistema escolherá automaticamente</option>
-                            <option value="1">Ambulância - ABC-1234</option>
-                            <option value="2">Van - XYZ-5678</option>
+                            {veiculos_options}
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="motorista">Motorista</label>
-                        <select id="motorista" name="motorista">
+                        <label for="motorista_id">Motorista</label>
+                        <select id="motorista_id" name="motorista_id">
                             <option value="">Sistema escolherá automaticamente</option>
-                            <option value="1">João Motorista</option>
-                            <option value="2">Maria Motorista</option>
+                            {motoristas_options}
                         </select>
                     </div>
                 </div>
@@ -1507,12 +1944,398 @@ def create_app():
                 
                 <div style="margin-top: 2rem;">
                     <button type="submit" class="btn btn-success">📅 Agendar Transporte</button>
-                    <a href="''' + url_for('agendamentos') + '''" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                    <a href="{url_for('agendamentos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
                 </div>
             </form>
         </div>
         '''
         return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")
+    
+    # ===== RELATÓRIOS =====
+    @app.route('/relatorios')
+    @login_required
+    def relatorios():
+        # Obter parâmetros de filtro
+        filtro_tipo = request.args.get('tipo', 'pacientes')
+        data_inicio = request.args.get('data_inicio', '')
+        data_fim = request.args.get('data_fim', '')
+        status_filtro = request.args.get('status', '')
+        
+        # Definir datas padrão (últimos 30 dias)
+        if not data_inicio:
+            data_inicio = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+        if not data_fim:
+            data_fim = date.today().strftime('%Y-%m-%d')
+        
+        # Buscar dados
+        pacientes_dados = []
+        veiculos_dados = []
+        motoristas_dados = []
+        agendamentos_dados = []
+        usuarios_dados = []
+        
+        try:
+            # Relatório de Pacientes
+            pacientes = Paciente.query.filter_by(ativo=True).order_by(Paciente.nome).all()
+            for p in pacientes:
+                total_agendamentos = Agendamento.query.filter_by(paciente_id=p.id).count()
+                pacientes_dados.append({
+                    'nome': p.nome,
+                    'cpf': p.cpf,
+                    'telefone': p.telefone,
+                    'endereco': p.endereco,
+                    'cartao_sus': p.cartao_sus or '-',
+                    'total_agendamentos': total_agendamentos,
+                    'data_cadastro': p.data_cadastro.strftime('%d/%m/%Y'),
+                    'observacoes': p.observacoes or '-'
+                })
+            
+            # Relatório de Veículos
+            veiculos = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.placa).all()
+            for v in veiculos:
+                total_agendamentos = Agendamento.query.filter_by(veiculo_id=v.id).count()
+                veiculos_dados.append({
+                    'placa': v.placa,
+                    'marca_modelo': f"{v.marca} {v.modelo}",
+                    'ano': v.ano,
+                    'tipo': v.tipo.replace('_', ' ').title(),
+                    'capacidade': v.capacidade or '-',
+                    'adaptado': 'Sim' if v.adaptado else 'Não',
+                    'total_agendamentos': total_agendamentos,
+                    'status': 'Ativo'
+                })
+            
+            # Relatório de Motoristas
+            motoristas = Motorista.query.order_by(Motorista.nome).all()
+            for m in motoristas:
+                total_agendamentos = Agendamento.query.filter_by(motorista_id=m.id).count()
+                # Verificar se CNH está vencida
+                cnh_status = 'Válida'
+                if m.vencimento_cnh < date.today():
+                    cnh_status = 'Vencida'
+                elif m.vencimento_cnh <= date.today() + timedelta(days=30):
+                    cnh_status = 'Vence em breve'
+                
+                motoristas_dados.append({
+                    'nome': m.nome,
+                    'cpf': m.cpf,
+                    'telefone': m.telefone,
+                    'cnh': m.cnh,
+                    'categoria_cnh': m.categoria_cnh,
+                    'vencimento_cnh': m.vencimento_cnh.strftime('%d/%m/%Y'),
+                    'cnh_status': cnh_status,
+                    'status': m.status.title(),
+                    'total_agendamentos': total_agendamentos
+                })
+            
+            # Relatório de Agendamentos
+            query = Agendamento.query
+            if data_inicio and data_fim:
+                query = query.filter(Agendamento.data.between(data_inicio, data_fim))
+            if status_filtro:
+                query = query.filter_by(status=status_filtro)
+            
+            agendamentos = query.order_by(Agendamento.data.desc(), Agendamento.hora.desc()).all()
+            for a in agendamentos:
+                motorista_nome = a.motorista.nome if a.motorista else 'Não atribuído'
+                veiculo_info = f"{a.veiculo.marca} {a.veiculo.modelo} - {a.veiculo.placa}" if a.veiculo else 'Não atribuído'
+                
+                agendamentos_dados.append({
+                    'data': a.data.strftime('%d/%m/%Y'),
+                    'hora': a.hora.strftime('%H:%M'),
+                    'paciente': a.paciente.nome,
+                    'telefone': a.paciente.telefone,
+                    'tipo_transporte': a.tipo_transporte.title(),
+                    'origem': a.origem,
+                    'destino': a.destino,
+                    'motorista': motorista_nome,
+                    'veiculo': veiculo_info,
+                    'status': a.status.replace('_', ' ').title(),
+                    'observacoes': a.observacoes or '-'
+                })
+            
+            # Relatório de Usuários
+            usuarios = Usuario.query.order_by(Usuario.nome_completo).all()
+            for u in usuarios:
+                usuarios_dados.append({
+                    'nome': u.nome_completo,
+                    'username': u.username,
+                    'email': u.email or '-',
+                    'tipo': u.tipo_usuario.title(),
+                    'status': 'Ativo' if u.ativo else 'Inativo'
+                })
+            
+        except Exception as e:
+            print(f"❌ Erro ao gerar relatórios: {e}")
+            flash('Erro ao carregar dados dos relatórios.', 'error')
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>📊 Relatórios Gerenciais</h2>
+            <p>Visualize e imprima relatórios completos do sistema</p>
+        </div>
+        
+        <!-- Filtros -->
+        <div class="filters no-print">
+            <form method="GET" id="filtrosForm">
+                <div class="filters-row">
+                    <div class="form-group">
+                        <label>Período:</label>
+                        <input type="date" name="data_inicio" value="{data_inicio}">
+                    </div>
+                    <div class="form-group">
+                        <label>Até:</label>
+                        <input type="date" name="data_fim" value="{data_fim}">
+                    </div>
+                    <div class="form-group">
+                        <label>Status Agendamentos:</label>
+                        <select name="status">
+                            <option value="">Todos</option>
+                            <option value="agendado" {"selected" if status_filtro == "agendado" else ""}>Agendado</option>
+                            <option value="confirmado" {"selected" if status_filtro == "confirmado" else ""}>Confirmado</option>
+                            <option value="em_andamento" {"selected" if status_filtro == "em_andamento" else ""}>Em Andamento</option>
+                            <option value="concluido" {"selected" if status_filtro == "concluido" else ""}>Concluído</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <button type="submit" class="btn">🔍 Filtrar</button>
+                        <button type="button" class="btn print-btn" onclick="window.print()">🖨️ Imprimir</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Abas dos Relatórios -->
+        <div class="tabs no-print">
+            <button class="tab active" onclick="showTab('pacientes')">👥 Pacientes ({len(pacientes_dados)})</button>
+            <button class="tab" onclick="showTab('agendamentos')">📅 Agendamentos ({len(agendamentos_dados)})</button>
+            <button class="tab" onclick="showTab('motoristas')">👨‍💼 Motoristas ({len(motoristas_dados)})</button>
+            <button class="tab" onclick="showTab('veiculos')">🚗 Veículos ({len(veiculos_dados)})</button>
+            <button class="tab" onclick="showTab('usuarios')">👤 Usuários ({len(usuarios_dados)})</button>
+        </div>
+        
+        <!-- Conteúdo dos Relatórios -->
+        
+        <!-- Relatório de Pacientes -->
+        <div id="pacientes" class="tab-content active">
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📋 Relatório de Pacientes</h3>
+                <p><strong>Total de pacientes ativos:</strong> {len(pacientes_dados)}</p>
+                <div class="table-container">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>CPF</th>
+                                <th>Telefone</th>
+                                <th>Endereço</th>
+                                <th>Cartão SUS</th>
+                                <th>Total Agendamentos</th>
+                                <th>Data Cadastro</th>
+                                <th>Observações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {"".join([f'''
+                            <tr>
+                                <td>{p["nome"]}</td>
+                                <td>{p["cpf"]}</td>
+                                <td>{p["telefone"]}</td>
+                                <td>{p["endereco"][:40]}{'...' if len(p["endereco"]) > 40 else ''}</td>
+                                <td>{p["cartao_sus"]}</td>
+                                <td>{p["total_agendamentos"]}</td>
+                                <td>{p["data_cadastro"]}</td>
+                                <td>{p["observacoes"][:30]}{'...' if len(p["observacoes"]) > 30 else ''}</td>
+                            </tr>
+                            ''' for p in pacientes_dados])}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Relatório de Agendamentos -->
+        <div id="agendamentos" class="tab-content">
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📅 Relatório de Agendamentos</h3>
+                <p><strong>Período:</strong> {datetime.strptime(data_inicio, '%Y-%m-%d').strftime('%d/%m/%Y')} a {datetime.strptime(data_fim, '%Y-%m-%d').strftime('%d/%m/%Y')}</p>
+                <p><strong>Total de agendamentos:</strong> {len(agendamentos_dados)}</p>
+                <div class="table-container">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Hora</th>
+                                <th>Paciente</th>
+                                <th>Telefone</th>
+                                <th>Tipo</th>
+                                <th>Origem</th>
+                                <th>Destino</th>
+                                <th>Motorista</th>
+                                <th>Veículo</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {"".join([f'''
+                            <tr>
+                                <td>{a["data"]}</td>
+                                <td>{a["hora"]}</td>
+                                <td>{a["paciente"]}</td>
+                                <td>{a["telefone"]}</td>
+                                <td>{a["tipo_transporte"]}</td>
+                                <td>{a["origem"][:25]}{'...' if len(a["origem"]) > 25 else ''}</td>
+                                <td>{a["destino"][:25]}{'...' if len(a["destino"]) > 25 else ''}</td>
+                                <td>{a["motorista"]}</td>
+                                <td>{a["veiculo"][:20]}{'...' if len(a["veiculo"]) > 20 else ''}</td>
+                                <td style="color: {'var(--success-color)' if a['status'] == 'Concluído' else 'var(--warning-color)' if a['status'] == 'Agendado' else 'var(--primary-color)'};">{a["status"]}</td>
+                            </tr>
+                            ''' for a in agendamentos_dados])}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Relatório de Motoristas -->
+        <div id="motoristas" class="tab-content">
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👨‍💼 Relatório de Motoristas</h3>
+                <p><strong>Total de motoristas:</strong> {len(motoristas_dados)}</p>
+                <div class="table-container">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>CPF</th>
+                                <th>Telefone</th>
+                                <th>CNH</th>
+                                <th>Categoria</th>
+                                <th>Vencimento CNH</th>
+                                <th>Status CNH</th>
+                                <th>Status</th>
+                                <th>Total Viagens</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {"".join([f'''
+                            <tr>
+                                <td>{m["nome"]}</td>
+                                <td>{m["cpf"]}</td>
+                                <td>{m["telefone"]}</td>
+                                <td>{m["cnh"]}</td>
+                                <td>{m["categoria_cnh"]}</td>
+                                <td>{m["vencimento_cnh"]}</td>
+                                <td style="color: {'var(--danger-color)' if m['cnh_status'] == 'Vencida' else 'var(--warning-color)' if m['cnh_status'] == 'Vence em breve' else 'var(--success-color)'};">{m["cnh_status"]}</td>
+                                <td style="color: {'var(--success-color)' if m['status'] == 'Ativo' else 'var(--gray-color)'};">{m["status"]}</td>
+                                <td>{m["total_agendamentos"]}</td>
+                            </tr>
+                            ''' for m in motoristas_dados])}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Relatório de Veículos -->
+        <div id="veiculos" class="tab-content">
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">🚗 Relatório de Veículos</h3>
+                <p><strong>Total de veículos ativos:</strong> {len(veiculos_dados)}</p>
+                <div class="table-container">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>Placa</th>
+                                <th>Marca/Modelo</th>
+                                <th>Ano</th>
+                                <th>Tipo</th>
+                                <th>Capacidade</th>
+                                <th>Adaptado PCD</th>
+                                <th>Total Transportes</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {"".join([f'''
+                            <tr>
+                                <td><strong>{v["placa"]}</strong></td>
+                                <td>{v["marca_modelo"]}</td>
+                                <td>{v["ano"]}</td>
+                                <td>{v["tipo"]}</td>
+                                <td>{v["capacidade"]}</td>
+                                <td style="color: {'var(--success-color)' if v['adaptado'] == 'Sim' else 'var(--gray-color)'};">{v["adaptado"]}</td>
+                                <td>{v["total_agendamentos"]}</td>
+                                <td style="color: var(--success-color);">{v["status"]}</td>
+                            </tr>
+                            ''' for v in veiculos_dados])}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Relatório de Usuários -->
+        <div id="usuarios" class="tab-content">
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👤 Relatório de Usuários</h3>
+                <p><strong>Total de usuários:</strong> {len(usuarios_dados)}</p>
+                <div class="table-container">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>Nome Completo</th>
+                                <th>Username</th>
+                                <th>Email</th>
+                                <th>Tipo de Usuário</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {"".join([f'''
+                            <tr>
+                                <td>{u["nome"]}</td>
+                                <td><strong>{u["username"]}</strong></td>
+                                <td>{u["email"]}</td>
+                                <td>{u["tipo"]}</td>
+                                <td style="color: {'var(--success-color)' if u['status'] == 'Ativo' else 'var(--danger-color)'};">{u["status"]}</td>
+                            </tr>
+                            ''' for u in usuarios_dados])}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            function showTab(tabName) {{
+                // Esconder todas as abas
+                const contents = document.querySelectorAll('.tab-content');
+                contents.forEach(content => content.classList.remove('active'));
+                
+                const tabs = document.querySelectorAll('.tab');
+                tabs.forEach(tab => tab.classList.remove('active'));
+                
+                // Mostrar aba selecionada
+                document.getElementById(tabName).classList.add('active');
+                event.target.classList.add('active');
+            }}
+            
+            // Auto-submit do formulário quando alterar filtros
+            const form = document.getElementById('filtrosForm');
+            const inputs = form.querySelectorAll('input, select');
+            inputs.forEach(input => {{
+                if (input.type !== 'submit' && !input.classList.contains('btn')) {{
+                    input.addEventListener('change', function() {{
+                        // Auto-submit após pequeno delay
+                        setTimeout(() => form.submit(), 100);
+                    }});
+                }}
+            }});
+        </script>
+        '''
+        
+        return gerar_layout_base("Relatórios", conteudo, "relatorios")
     
     @app.route('/logout')
     @login_required
@@ -1532,6 +2355,7 @@ if __name__ == '__main__':
         print("📱 Acesse: http://localhost:5010")
         print("🏥 Prefeitura Municipal de Cosmópolis")
         print("👤 Login: admin / admin123")
+        print("📊 Sistema completo com saudação corrigida!")
         app.run(debug=True, host='0.0.0.0', port=5010)
     except Exception as e:
         print(f"❌ Erro ao iniciar aplicação: {e}")
