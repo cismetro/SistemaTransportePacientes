@@ -1,36 +1,11 @@
 import os
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from flask import Flask, render_template, redirect, url_for, flash, request, get_flashed_messages, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
 import json
-
-# ===== FUNÇÕES DE SAUDAÇÃO =====
-def obter_saudacao():
-    """Retorna a saudação apropriada baseada no horário atual"""
-    agora = datetime.now()
-    hora = agora.hour
-    
-    if 5 <= hora < 12:
-        return "Bom dia! 🌅"
-    elif 12 <= hora < 18:
-        return "Boa tarde! ☀️"
-    else:
-        return "Boa noite! 🌙"
-
-def obter_emoji_horario():
-    """Retorna o emoji apropriado para o horário"""
-    agora = datetime.now()
-    hora = agora.hour
-    
-    if 5 <= hora < 12:
-        return "🌅"
-    elif 12 <= hora < 18:
-        return "☀️"
-    else:
-        return "🌙"
 
 # Inicializar extensões
 db = SQLAlchemy()
@@ -260,7 +235,7 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             .nav a {{ color: var(--text-color); text-decoration: none; margin-right: 2rem; padding: 0.5rem 1rem; border-radius: 0.25rem; transition: all 0.3s ease; }}
             .nav a:hover {{ background: var(--color-95); color: var(--primary-color); }}
             .nav a.active {{ background: var(--primary-color); color: var(--color-100); }}
-            .container {{ padding: 2rem; max-width: 1400px; margin: 0 auto; }}
+            .container {{ padding: 2rem; max-width: 1200px; margin: 0 auto; }}
             .page-header {{ margin-bottom: 2rem; }}
             .page-header h2 {{ color: var(--primary-color); margin: 0 0 0.5rem 0; }}
             .page-header p {{ color: var(--gray-color); margin: 0; }}
@@ -291,33 +266,10 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             .alert-error {{ background: rgba(232, 29, 81, 0.1); color: var(--danger-color); border: 1px solid var(--danger-color); }}
             .alert-success {{ background: rgba(121, 178, 74, 0.1); color: var(--success-color); border: 1px solid var(--success-color); }}
             .alert-warning {{ background: rgba(242, 130, 60, 0.1); color: var(--warning-color); border: 1px solid var(--warning-color); }}
-            
-            /* Estilos para relatórios */
-            .tabs {{ display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 2rem; }}
-            .tab {{ padding: 1rem 2rem; background: transparent; border: none; cursor: pointer; color: var(--gray-color); font-weight: 600; transition: all 0.3s ease; }}
-            .tab.active {{ color: var(--primary-color); border-bottom: 2px solid var(--primary-color); }}
-            .tab:hover {{ color: var(--primary-color); }}
-            .tab-content {{ display: none; }}
-            .tab-content.active {{ display: block; }}
-            .filters {{ background: var(--color-95); padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 2rem; }}
-            .filters-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; align-items: end; }}
-            .table-container {{ overflow-x: auto; }}
-            .report-table {{ width: 100%; border-collapse: collapse; margin-bottom: 2rem; }}
-            .report-table th {{ background: var(--primary-color); color: var(--color-100); padding: 1rem; text-align: left; }}
-            .report-table td {{ padding: 0.75rem; border-bottom: 1px solid var(--border-color); }}
-            .report-table tr:hover {{ background: var(--color-95); }}
-            .print-btn {{ background: var(--info-color); }}
-            .print-btn:hover {{ background: #7bb8ff; }}
-            
-            @media print {{
-                .no-print {{ display: none !important; }}
-                .page-header, .nav, .header, .filters {{ display: none !important; }}
-                .container {{ padding: 0; max-width: none; }}
-            }}
         </style>
     </head>
     <body>
-        <div class="header no-print">
+        <div class="header">
             <h1>🚑 Sistema de Transporte de Pacientes</h1>
             <div class="user-info">
                 Bem-vindo, {current_user.nome_completo}! 
@@ -326,13 +278,12 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             <div style="clear: both;"></div>
         </div>
         
-        <div class="nav no-print">
+        <div class="nav">
             <a href="{url_for('dashboard')}" class="{'active' if ativo == 'dashboard' else ''}">🏠 Dashboard</a>
             <a href="{url_for('pacientes')}" class="{'active' if ativo == 'pacientes' else ''}">👥 Pacientes</a>
             <a href="{url_for('veiculos')}" class="{'active' if ativo == 'veiculos' else ''}">🚗 Veículos</a>
             <a href="{url_for('motoristas')}" class="{'active' if ativo == 'motoristas' else ''}">👨‍💼 Motoristas</a>
             <a href="{url_for('agendamentos')}" class="{'active' if ativo == 'agendamentos' else ''}">📅 Agendamentos</a>
-            <a href="{url_for('relatorios')}" class="{'active' if ativo == 'relatorios' else ''}">📊 Relatórios</a>
         </div>
         
         <div class="container">
@@ -372,7 +323,7 @@ def create_app():
     with app.app_context():
         verificar_e_criar_banco()
     
-    # ===== ROTAS =====
+    # Rotas
     @app.route('/')
     def index():
         if current_user.is_authenticated:
@@ -490,7 +441,7 @@ def create_app():
         </html>
         '''
     
-    # ===== DASHBOARD =====
+    # ===== ROTAS DO DASHBOARD =====
     @app.route('/dashboard')
     @login_required
     def dashboard():
@@ -724,7 +675,7 @@ def create_app():
                 <div class="welcome-banner fade-in-up">
                     <div class="row align-items-center">
                         <div class="col-md-8">
-                            <h1 class="h3 mb-2">{obter_saudacao()}</h1>
+                            <h1 class="h3 mb-2">Bom dia! 🌅</h1>
                             <p class="mb-0 opacity-90">Sistema de Transporte de Pacientes - Cosmópolis/SP</p>
                         </div>
                         <div class="col-md-4 text-end">
@@ -828,9 +779,9 @@ def create_app():
                                         </a>
                                     </div>
                                     <div class="col-md-3 col-6">
-                                        <a href="{url_for('relatorios')}" class="quick-action">
-                                            <i class="bi bi-file-earmark-text"></i>
-                                            <div class="fw-semibold">Relatórios</div>
+                                        <a href="{url_for('agendamentos')}" class="quick-action">
+                                            <i class="bi bi-calendar3"></i>
+                                            <div class="fw-semibold">Ver Agenda</div>
                                         </a>
                                     </div>
                                     <div class="col-md-3 col-6">
@@ -884,9 +835,6 @@ def create_app():
                                 </a>
                                 <a href="{url_for('agendamentos')}" class="list-group-item list-group-item-action">
                                     <i class="bi bi-calendar-event me-2"></i>Agendamentos
-                                </a>
-                                <a href="{url_for('relatorios')}" class="list-group-item list-group-item-action">
-                                    <i class="bi bi-file-earmark-text me-2"></i>Relatórios
                                 </a>
                             </div>
                         </div>
@@ -1127,7 +1075,10 @@ def create_app():
             print(f"❌ Erro na API Dashboard: {e}")
             return jsonify({'error': str(e)}), 500
     
-    # ===== PACIENTES =====
+    # ===== RESTO DAS ROTAS (continuam iguais) =====
+    # [Continuação com todas as outras rotas...]
+    
+    # ===== ROTAS DE PACIENTES =====
     @app.route('/pacientes')
     @login_required
     def pacientes():
@@ -1306,59 +1257,33 @@ def create_app():
         '''
         return gerar_layout_base("Cadastrar Paciente", conteudo, "pacientes")
     
-    # ===== VEÍCULOS =====
+    # ===== ROTAS DE VEÍCULOS =====
     @app.route('/veiculos')
     @login_required
     def veiculos():
-        veiculos_lista = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.data_cadastro.desc()).all()
-        
-        veiculos_html = ""
-        if veiculos_lista:
-            veiculos_html = '''
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">🚗 Veículos Cadastrados</h3>
-                <div style="overflow-x: auto;">
-                    <table style="width: 100%; border-collapse: collapse;">
-                        <thead>
-                            <tr style="background: var(--color-95);">
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Placa</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Marca/Modelo</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ano</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Adaptado PCD</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            '''
-            for veiculo in veiculos_lista:
-                veiculos_html += f'''
-                            <tr>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.placa}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.marca} {veiculo.modelo}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.tipo.replace('_', ' ').title()}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.ano}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{'✅ Sim' if veiculo.adaptado else '❌ Não'}</td>
-                            </tr>
-                '''
-            veiculos_html += '''
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            '''
-        
-        conteudo = f'''
+        conteudo = '''
         <div class="page-header">
             <h2>🚗 Gerenciamento de Veículos</h2>
             <p>Controle da frota municipal de transporte de pacientes</p>
-            <div style="margin-top: 1rem;">
-                <a href="{url_for('veiculos_cadastrar')}" class="btn">🚗 Cadastrar Novo Veículo</a>
-            </div>
         </div>
         
-        {veiculos_html}
-        
-        {f'<div class="card"><div class="coming-soon"><div class="icon">🚗</div><h3>Nenhum veículo cadastrado</h3><p>Comece cadastrando o primeiro veículo da frota!</p></div></div>' if not veiculos_lista else ''}
+        <div class="card">
+            <div class="coming-soon">
+                <div class="icon">🚗</div>
+                <h3>Módulo de Veículos</h3>
+                <p>Este módulo está em desenvolvimento e incluirá:</p>
+                <ul style="text-align: left; display: inline-block; margin-top: 1rem;">
+                    <li>✅ Cadastro de veículos</li>
+                    <li>✅ Controle de manutenção</li>
+                    <li>✅ Documentação</li>
+                    <li>✅ Quilometragem</li>
+                    <li>✅ Agendamento de uso</li>
+                </ul>
+                <div style="margin-top: 2rem;">
+                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
+                </div>
+            </div>
+        </div>
         '''
         return gerar_layout_base("Veículos", conteudo, "veiculos")
     
@@ -1366,201 +1291,37 @@ def create_app():
     @login_required
     def veiculos_cadastrar():
         if request.method == 'POST':
-            try:
-                # Extrair dados do formulário
-                placa = request.form.get('placa', '').strip().upper()
-                marca = request.form.get('marca', '').strip()
-                modelo = request.form.get('modelo', '').strip()
-                ano = int(request.form.get('ano', 0))
-                cor = request.form.get('cor', '').strip()
-                tipo = request.form.get('tipo', '').strip()
-                capacidade = request.form.get('capacidade')
-                adaptado = request.form.get('adaptado') == 'sim'
-                observacoes = request.form.get('observacoes', '').strip()
-                
-                # Validação básica
-                if not all([placa, marca, modelo, ano, tipo]):
-                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
-                    return redirect(url_for('veiculos_cadastrar'))
-                
-                # Verificar se placa já existe
-                if Veiculo.query.filter_by(placa=placa).first():
-                    flash('Placa já cadastrada no sistema!', 'error')
-                    return redirect(url_for('veiculos_cadastrar'))
-                
-                # Criar novo veículo
-                veiculo = Veiculo(
-                    placa=placa,
-                    marca=marca,
-                    modelo=modelo,
-                    ano=ano,
-                    cor=cor if cor else None,
-                    tipo=tipo,
-                    capacidade=int(capacidade) if capacidade else None,
-                    adaptado=adaptado,
-                    observacoes=observacoes if observacoes else None
-                )
-                
-                db.session.add(veiculo)
-                db.session.commit()
-                
-                flash(f'Veículo "{placa}" cadastrado com sucesso!', 'success')
-                return redirect(url_for('veiculos'))
-                
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Erro ao cadastrar veículo: {str(e)}', 'error')
-                print(f"❌ Erro ao cadastrar veículo: {e}")
+            flash('Funcionalidade em desenvolvimento! Cadastro será implementado em breve.', 'warning')
+            return redirect(url_for('veiculos'))
         
-        # Gerar alertas de mensagens flash
-        messages_html = ""
-        for category, message in get_flashed_messages(with_categories=True):
-            alert_class = f"alert-{category}"
-            messages_html += f'<div class="alert {alert_class}">{message}</div>'
-        
-        conteudo = f'''
-        <div class="breadcrumb">
-            <a href="{url_for('dashboard')}">Dashboard</a> > 
-            <a href="{url_for('veiculos')}">Veículos</a> > 
-            Cadastrar Novo Veículo
-        </div>
-        
+        conteudo = '''
         <div class="page-header">
             <h2>🚗 Cadastrar Novo Veículo</h2>
-            <p>Registre um novo veículo na frota municipal</p>
-        </div>
-        
-        {messages_html}
-        
-        <div class="card">
-            <form method="POST">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="placa">Placa *</label>
-                        <input type="text" id="placa" name="placa" placeholder="ABC-1234" required style="text-transform: uppercase;">
-                    </div>
-                    <div class="form-group">
-                        <label for="marca">Marca *</label>
-                        <input type="text" id="marca" name="marca" required>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="modelo">Modelo *</label>
-                        <input type="text" id="modelo" name="modelo" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="ano">Ano *</label>
-                        <input type="number" id="ano" name="ano" min="1980" max="2030" required>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="cor">Cor</label>
-                        <input type="text" id="cor" name="cor">
-                    </div>
-                    <div class="form-group">
-                        <label for="tipo">Tipo de Veículo *</label>
-                        <select id="tipo" name="tipo" required>
-                            <option value="">Selecione...</option>
-                            <option value="ambulancia">Ambulância</option>
-                            <option value="van">Van</option>
-                            <option value="micro_onibus">Micro-ônibus</option>
-                            <option value="carro">Carro</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="capacidade">Capacidade de Passageiros</label>
-                        <input type="number" id="capacidade" name="capacidade" min="1" max="50">
-                    </div>
-                    <div class="form-group">
-                        <label for="adaptado">Adaptado para PCD</label>
-                        <select id="adaptado" name="adaptado">
-                            <option value="nao">Não</option>
-                            <option value="sim">Sim</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="observacoes">Observações</label>
-                    <textarea id="observacoes" name="observacoes" rows="3" placeholder="Equipamentos especiais, restrições, etc."></textarea>
-                </div>
-                
-                <div style="margin-top: 2rem;">
-                    <button type="submit" class="btn btn-success">💾 Salvar Veículo</button>
-                    <a href="{url_for('veiculos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
-                </div>
-            </form>
+            <p>Em desenvolvimento...</p>
         </div>
         '''
         return gerar_layout_base("Cadastrar Veículo", conteudo, "veiculos")
     
-    # ===== MOTORISTAS =====
+    # ===== ROTAS DE MOTORISTAS =====
     @app.route('/motoristas')
     @login_required
     def motoristas():
-        motoristas_lista = Motorista.query.order_by(Motorista.data_cadastro.desc()).all()
-        
-        motoristas_html = ""
-        if motoristas_lista:
-            motoristas_html = '''
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👨‍💼 Motoristas Cadastrados</h3>
-                <div style="overflow-x: auto;">
-                    <table style="width: 100%; border-collapse: collapse;">
-                        <thead>
-                            <tr style="background: var(--color-95);">
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">CNH</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Categoria</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Vencimento CNH</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            '''
-            for motorista in motoristas_lista:
-                status_color = {
-                    'ativo': 'color: var(--success-color);',
-                    'inativo': 'color: var(--gray-color);',
-                    'ferias': 'color: var(--warning-color);',
-                    'licenca': 'color: var(--info-color);'
-                }.get(motorista.status, '')
-                
-                motoristas_html += f'''
-                            <tr>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.nome}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.cnh}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.categoria_cnh}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{motorista.status.title()}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.vencimento_cnh.strftime('%d/%m/%Y')}</td>
-                            </tr>
-                '''
-            motoristas_html += '''
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            '''
-        
-        conteudo = f'''
+        conteudo = '''
         <div class="page-header">
             <h2>👨‍💼 Gerenciamento de Motoristas</h2>
             <p>Cadastro e controle dos motoristas do sistema</p>
-            <div style="margin-top: 1rem;">
-                <a href="{url_for('motoristas_cadastrar')}" class="btn">👨‍💼 Cadastrar Novo Motorista</a>
-            </div>
         </div>
         
-        {motoristas_html}
-        
-        {f'<div class="card"><div class="coming-soon"><div class="icon">👨‍💼</div><h3>Nenhum motorista cadastrado</h3><p>Comece cadastrando o primeiro motorista!</p></div></div>' if not motoristas_lista else ''}
+        <div class="card">
+            <div class="coming-soon">
+                <div class="icon">👨‍💼</div>
+                <h3>Módulo de Motoristas</h3>
+                <p>Este módulo está em desenvolvimento...</p>
+                <div style="margin-top: 2rem;">
+                    <a href="''' + url_for('dashboard') + '''" class="btn">← Voltar ao Dashboard</a>
+                </div>
+            </div>
+        </div>
         '''
         return gerar_layout_base("Motoristas", conteudo, "motoristas")
     
@@ -1568,160 +1329,18 @@ def create_app():
     @login_required
     def motoristas_cadastrar():
         if request.method == 'POST':
-            try:
-                # Extrair dados do formulário
-                nome = request.form.get('nome', '').strip()
-                cpf = request.form.get('cpf', '').strip()
-                telefone = request.form.get('telefone', '').strip()
-                data_nascimento = request.form.get('data_nascimento')
-                cnh = request.form.get('cnh', '').strip()
-                categoria_cnh = request.form.get('categoria_cnh', '').strip()
-                vencimento_cnh = request.form.get('vencimento_cnh')
-                endereco = request.form.get('endereco', '').strip()
-                status = request.form.get('status', 'ativo').strip()
-                observacoes = request.form.get('observacoes', '').strip()
-                
-                # Validação básica
-                if not all([nome, cpf, telefone, data_nascimento, cnh, categoria_cnh, vencimento_cnh]):
-                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
-                    return redirect(url_for('motoristas_cadastrar'))
-                
-                # Verificar se CPF ou CNH já existem
-                if Motorista.query.filter_by(cpf=cpf).first():
-                    flash('CPF já cadastrado no sistema!', 'error')
-                    return redirect(url_for('motoristas_cadastrar'))
-                
-                if Motorista.query.filter_by(cnh=cnh).first():
-                    flash('CNH já cadastrada no sistema!', 'error')
-                    return redirect(url_for('motoristas_cadastrar'))
-                
-                # Converter datas
-                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
-                vencimento_cnh = datetime.strptime(vencimento_cnh, '%Y-%m-%d').date()
-                
-                # Criar novo motorista
-                motorista = Motorista(
-                    nome=nome,
-                    cpf=cpf,
-                    telefone=telefone,
-                    data_nascimento=data_nascimento,
-                    cnh=cnh,
-                    categoria_cnh=categoria_cnh,
-                    vencimento_cnh=vencimento_cnh,
-                    endereco=endereco if endereco else None,
-                    status=status,
-                    observacoes=observacoes if observacoes else None
-                )
-                
-                db.session.add(motorista)
-                db.session.commit()
-                
-                flash(f'Motorista "{nome}" cadastrado com sucesso!', 'success')
-                return redirect(url_for('motoristas'))
-                
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Erro ao cadastrar motorista: {str(e)}', 'error')
-                print(f"❌ Erro ao cadastrar motorista: {e}")
+            flash('Funcionalidade em desenvolvimento!', 'warning')
+            return redirect(url_for('motoristas'))
         
-        # Gerar alertas de mensagens flash
-        messages_html = ""
-        for category, message in get_flashed_messages(with_categories=True):
-            alert_class = f"alert-{category}"
-            messages_html += f'<div class="alert {alert_class}">{message}</div>'
-        
-        conteudo = f'''
-        <div class="breadcrumb">
-            <a href="{url_for('dashboard')}">Dashboard</a> > 
-            <a href="{url_for('motoristas')}">Motoristas</a> > 
-            Cadastrar Novo Motorista
-        </div>
-        
+        conteudo = '''
         <div class="page-header">
             <h2>👨‍💼 Cadastrar Novo Motorista</h2>
-            <p>Registre um novo motorista no sistema</p>
-        </div>
-        
-        {messages_html}
-        
-        <div class="card">
-            <form method="POST">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="nome">Nome Completo *</label>
-                        <input type="text" id="nome" name="nome" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="cpf">CPF *</label>
-                        <input type="text" id="cpf" name="cpf" placeholder="000.000.000-00" required>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="telefone">Telefone *</label>
-                        <input type="tel" id="telefone" name="telefone" placeholder="(00) 00000-0000" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="data_nascimento">Data de Nascimento *</label>
-                        <input type="date" id="data_nascimento" name="data_nascimento" required>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="cnh">Número da CNH *</label>
-                        <input type="text" id="cnh" name="cnh" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="categoria_cnh">Categoria CNH *</label>
-                        <select id="categoria_cnh" name="categoria_cnh" required>
-                            <option value="">Selecione...</option>
-                            <option value="A">A - Motocicleta</option>
-                            <option value="B">B - Carro</option>
-                            <option value="C">C - Caminhão</option>
-                            <option value="D">D - Ônibus</option>
-                            <option value="E">E - Carreta</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="vencimento_cnh">Vencimento da CNH *</label>
-                        <input type="date" id="vencimento_cnh" name="vencimento_cnh" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="status">Status *</label>
-                        <select id="status" name="status" required>
-                            <option value="ativo">Ativo</option>
-                            <option value="inativo">Inativo</option>
-                            <option value="ferias">Férias</option>
-                            <option value="licenca">Licença</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="endereco">Endereço Completo</label>
-                    <input type="text" id="endereco" name="endereco">
-                </div>
-                
-                <div class="form-group">
-                    <label for="observacoes">Observações</label>
-                    <textarea id="observacoes" name="observacoes" rows="3" placeholder="Especializações, restrições, etc."></textarea>
-                </div>
-                
-                <div style="margin-top: 2rem;">
-                    <button type="submit" class="btn btn-success">💾 Salvar Motorista</button>
-                    <a href="{url_for('motoristas')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
-                </div>
-            </form>
+            <p>Em desenvolvimento...</p>
         </div>
         '''
         return gerar_layout_base("Cadastrar Motorista", conteudo, "motoristas")
     
-    # ===== AGENDAMENTOS =====
+    # ===== ROTAS DE AGENDAMENTOS =====
     @app.route('/agendamentos')
     @login_required
     def agendamentos():
@@ -1951,392 +1570,6 @@ def create_app():
         '''
         return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")
     
-    # ===== RELATÓRIOS =====
-    @app.route('/relatorios')
-    @login_required
-    def relatorios():
-        # Obter parâmetros de filtro
-        filtro_tipo = request.args.get('tipo', 'pacientes')
-        data_inicio = request.args.get('data_inicio', '')
-        data_fim = request.args.get('data_fim', '')
-        status_filtro = request.args.get('status', '')
-        
-        # Definir datas padrão (últimos 30 dias)
-        if not data_inicio:
-            data_inicio = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
-        if not data_fim:
-            data_fim = date.today().strftime('%Y-%m-%d')
-        
-        # Buscar dados
-        pacientes_dados = []
-        veiculos_dados = []
-        motoristas_dados = []
-        agendamentos_dados = []
-        usuarios_dados = []
-        
-        try:
-            # Relatório de Pacientes
-            pacientes = Paciente.query.filter_by(ativo=True).order_by(Paciente.nome).all()
-            for p in pacientes:
-                total_agendamentos = Agendamento.query.filter_by(paciente_id=p.id).count()
-                pacientes_dados.append({
-                    'nome': p.nome,
-                    'cpf': p.cpf,
-                    'telefone': p.telefone,
-                    'endereco': p.endereco,
-                    'cartao_sus': p.cartao_sus or '-',
-                    'total_agendamentos': total_agendamentos,
-                    'data_cadastro': p.data_cadastro.strftime('%d/%m/%Y'),
-                    'observacoes': p.observacoes or '-'
-                })
-            
-            # Relatório de Veículos
-            veiculos = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.placa).all()
-            for v in veiculos:
-                total_agendamentos = Agendamento.query.filter_by(veiculo_id=v.id).count()
-                veiculos_dados.append({
-                    'placa': v.placa,
-                    'marca_modelo': f"{v.marca} {v.modelo}",
-                    'ano': v.ano,
-                    'tipo': v.tipo.replace('_', ' ').title(),
-                    'capacidade': v.capacidade or '-',
-                    'adaptado': 'Sim' if v.adaptado else 'Não',
-                    'total_agendamentos': total_agendamentos,
-                    'status': 'Ativo'
-                })
-            
-            # Relatório de Motoristas
-            motoristas = Motorista.query.order_by(Motorista.nome).all()
-            for m in motoristas:
-                total_agendamentos = Agendamento.query.filter_by(motorista_id=m.id).count()
-                # Verificar se CNH está vencida
-                cnh_status = 'Válida'
-                if m.vencimento_cnh < date.today():
-                    cnh_status = 'Vencida'
-                elif m.vencimento_cnh <= date.today() + timedelta(days=30):
-                    cnh_status = 'Vence em breve'
-                
-                motoristas_dados.append({
-                    'nome': m.nome,
-                    'cpf': m.cpf,
-                    'telefone': m.telefone,
-                    'cnh': m.cnh,
-                    'categoria_cnh': m.categoria_cnh,
-                    'vencimento_cnh': m.vencimento_cnh.strftime('%d/%m/%Y'),
-                    'cnh_status': cnh_status,
-                    'status': m.status.title(),
-                    'total_agendamentos': total_agendamentos
-                })
-            
-            # Relatório de Agendamentos
-            query = Agendamento.query
-            if data_inicio and data_fim:
-                query = query.filter(Agendamento.data.between(data_inicio, data_fim))
-            if status_filtro:
-                query = query.filter_by(status=status_filtro)
-            
-            agendamentos = query.order_by(Agendamento.data.desc(), Agendamento.hora.desc()).all()
-            for a in agendamentos:
-                motorista_nome = a.motorista.nome if a.motorista else 'Não atribuído'
-                veiculo_info = f"{a.veiculo.marca} {a.veiculo.modelo} - {a.veiculo.placa}" if a.veiculo else 'Não atribuído'
-                
-                agendamentos_dados.append({
-                    'data': a.data.strftime('%d/%m/%Y'),
-                    'hora': a.hora.strftime('%H:%M'),
-                    'paciente': a.paciente.nome,
-                    'telefone': a.paciente.telefone,
-                    'tipo_transporte': a.tipo_transporte.title(),
-                    'origem': a.origem,
-                    'destino': a.destino,
-                    'motorista': motorista_nome,
-                    'veiculo': veiculo_info,
-                    'status': a.status.replace('_', ' ').title(),
-                    'observacoes': a.observacoes or '-'
-                })
-            
-            # Relatório de Usuários
-            usuarios = Usuario.query.order_by(Usuario.nome_completo).all()
-            for u in usuarios:
-                usuarios_dados.append({
-                    'nome': u.nome_completo,
-                    'username': u.username,
-                    'email': u.email or '-',
-                    'tipo': u.tipo_usuario.title(),
-                    'status': 'Ativo' if u.ativo else 'Inativo'
-                })
-            
-        except Exception as e:
-            print(f"❌ Erro ao gerar relatórios: {e}")
-            flash('Erro ao carregar dados dos relatórios.', 'error')
-        
-        conteudo = f'''
-        <div class="page-header">
-            <h2>📊 Relatórios Gerenciais</h2>
-            <p>Visualize e imprima relatórios completos do sistema</p>
-        </div>
-        
-        <!-- Filtros -->
-        <div class="filters no-print">
-            <form method="GET" id="filtrosForm">
-                <div class="filters-row">
-                    <div class="form-group">
-                        <label>Período:</label>
-                        <input type="date" name="data_inicio" value="{data_inicio}">
-                    </div>
-                    <div class="form-group">
-                        <label>Até:</label>
-                        <input type="date" name="data_fim" value="{data_fim}">
-                    </div>
-                    <div class="form-group">
-                        <label>Status Agendamentos:</label>
-                        <select name="status">
-                            <option value="">Todos</option>
-                            <option value="agendado" {"selected" if status_filtro == "agendado" else ""}>Agendado</option>
-                            <option value="confirmado" {"selected" if status_filtro == "confirmado" else ""}>Confirmado</option>
-                            <option value="em_andamento" {"selected" if status_filtro == "em_andamento" else ""}>Em Andamento</option>
-                            <option value="concluido" {"selected" if status_filtro == "concluido" else ""}>Concluído</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <button type="submit" class="btn">🔍 Filtrar</button>
-                        <button type="button" class="btn print-btn" onclick="window.print()">🖨️ Imprimir</button>
-                    </div>
-                </div>
-            </form>
-        </div>
-        
-        <!-- Abas dos Relatórios -->
-        <div class="tabs no-print">
-            <button class="tab active" onclick="showTab('pacientes')">👥 Pacientes ({len(pacientes_dados)})</button>
-            <button class="tab" onclick="showTab('agendamentos')">📅 Agendamentos ({len(agendamentos_dados)})</button>
-            <button class="tab" onclick="showTab('motoristas')">👨‍💼 Motoristas ({len(motoristas_dados)})</button>
-            <button class="tab" onclick="showTab('veiculos')">🚗 Veículos ({len(veiculos_dados)})</button>
-            <button class="tab" onclick="showTab('usuarios')">👤 Usuários ({len(usuarios_dados)})</button>
-        </div>
-        
-        <!-- Conteúdo dos Relatórios -->
-        
-        <!-- Relatório de Pacientes -->
-        <div id="pacientes" class="tab-content active">
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📋 Relatório de Pacientes</h3>
-                <p><strong>Total de pacientes ativos:</strong> {len(pacientes_dados)}</p>
-                <div class="table-container">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Nome</th>
-                                <th>CPF</th>
-                                <th>Telefone</th>
-                                <th>Endereço</th>
-                                <th>Cartão SUS</th>
-                                <th>Total Agendamentos</th>
-                                <th>Data Cadastro</th>
-                                <th>Observações</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {"".join([f'''
-                            <tr>
-                                <td>{p["nome"]}</td>
-                                <td>{p["cpf"]}</td>
-                                <td>{p["telefone"]}</td>
-                                <td>{p["endereco"][:40]}{'...' if len(p["endereco"]) > 40 else ''}</td>
-                                <td>{p["cartao_sus"]}</td>
-                                <td>{p["total_agendamentos"]}</td>
-                                <td>{p["data_cadastro"]}</td>
-                                <td>{p["observacoes"][:30]}{'...' if len(p["observacoes"]) > 30 else ''}</td>
-                            </tr>
-                            ''' for p in pacientes_dados])}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Relatório de Agendamentos -->
-        <div id="agendamentos" class="tab-content">
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📅 Relatório de Agendamentos</h3>
-                <p><strong>Período:</strong> {datetime.strptime(data_inicio, '%Y-%m-%d').strftime('%d/%m/%Y')} a {datetime.strptime(data_fim, '%Y-%m-%d').strftime('%d/%m/%Y')}</p>
-                <p><strong>Total de agendamentos:</strong> {len(agendamentos_dados)}</p>
-                <div class="table-container">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Data</th>
-                                <th>Hora</th>
-                                <th>Paciente</th>
-                                <th>Telefone</th>
-                                <th>Tipo</th>
-                                <th>Origem</th>
-                                <th>Destino</th>
-                                <th>Motorista</th>
-                                <th>Veículo</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {"".join([f'''
-                            <tr>
-                                <td>{a["data"]}</td>
-                                <td>{a["hora"]}</td>
-                                <td>{a["paciente"]}</td>
-                                <td>{a["telefone"]}</td>
-                                <td>{a["tipo_transporte"]}</td>
-                                <td>{a["origem"][:25]}{'...' if len(a["origem"]) > 25 else ''}</td>
-                                <td>{a["destino"][:25]}{'...' if len(a["destino"]) > 25 else ''}</td>
-                                <td>{a["motorista"]}</td>
-                                <td>{a["veiculo"][:20]}{'...' if len(a["veiculo"]) > 20 else ''}</td>
-                                <td style="color: {'var(--success-color)' if a['status'] == 'Concluído' else 'var(--warning-color)' if a['status'] == 'Agendado' else 'var(--primary-color)'};">{a["status"]}</td>
-                            </tr>
-                            ''' for a in agendamentos_dados])}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Relatório de Motoristas -->
-        <div id="motoristas" class="tab-content">
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👨‍💼 Relatório de Motoristas</h3>
-                <p><strong>Total de motoristas:</strong> {len(motoristas_dados)}</p>
-                <div class="table-container">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Nome</th>
-                                <th>CPF</th>
-                                <th>Telefone</th>
-                                <th>CNH</th>
-                                <th>Categoria</th>
-                                <th>Vencimento CNH</th>
-                                <th>Status CNH</th>
-                                <th>Status</th>
-                                <th>Total Viagens</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {"".join([f'''
-                            <tr>
-                                <td>{m["nome"]}</td>
-                                <td>{m["cpf"]}</td>
-                                <td>{m["telefone"]}</td>
-                                <td>{m["cnh"]}</td>
-                                <td>{m["categoria_cnh"]}</td>
-                                <td>{m["vencimento_cnh"]}</td>
-                                <td style="color: {'var(--danger-color)' if m['cnh_status'] == 'Vencida' else 'var(--warning-color)' if m['cnh_status'] == 'Vence em breve' else 'var(--success-color)'};">{m["cnh_status"]}</td>
-                                <td style="color: {'var(--success-color)' if m['status'] == 'Ativo' else 'var(--gray-color)'};">{m["status"]}</td>
-                                <td>{m["total_agendamentos"]}</td>
-                            </tr>
-                            ''' for m in motoristas_dados])}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Relatório de Veículos -->
-        <div id="veiculos" class="tab-content">
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">🚗 Relatório de Veículos</h3>
-                <p><strong>Total de veículos ativos:</strong> {len(veiculos_dados)}</p>
-                <div class="table-container">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Placa</th>
-                                <th>Marca/Modelo</th>
-                                <th>Ano</th>
-                                <th>Tipo</th>
-                                <th>Capacidade</th>
-                                <th>Adaptado PCD</th>
-                                <th>Total Transportes</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {"".join([f'''
-                            <tr>
-                                <td><strong>{v["placa"]}</strong></td>
-                                <td>{v["marca_modelo"]}</td>
-                                <td>{v["ano"]}</td>
-                                <td>{v["tipo"]}</td>
-                                <td>{v["capacidade"]}</td>
-                                <td style="color: {'var(--success-color)' if v['adaptado'] == 'Sim' else 'var(--gray-color)'};">{v["adaptado"]}</td>
-                                <td>{v["total_agendamentos"]}</td>
-                                <td style="color: var(--success-color);">{v["status"]}</td>
-                            </tr>
-                            ''' for v in veiculos_dados])}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Relatório de Usuários -->
-        <div id="usuarios" class="tab-content">
-            <div class="card">
-                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👤 Relatório de Usuários</h3>
-                <p><strong>Total de usuários:</strong> {len(usuarios_dados)}</p>
-                <div class="table-container">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Nome Completo</th>
-                                <th>Username</th>
-                                <th>Email</th>
-                                <th>Tipo de Usuário</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {"".join([f'''
-                            <tr>
-                                <td>{u["nome"]}</td>
-                                <td><strong>{u["username"]}</strong></td>
-                                <td>{u["email"]}</td>
-                                <td>{u["tipo"]}</td>
-                                <td style="color: {'var(--success-color)' if u['status'] == 'Ativo' else 'var(--danger-color)'};">{u["status"]}</td>
-                            </tr>
-                            ''' for u in usuarios_dados])}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <script>
-            function showTab(tabName) {{
-                // Esconder todas as abas
-                const contents = document.querySelectorAll('.tab-content');
-                contents.forEach(content => content.classList.remove('active'));
-                
-                const tabs = document.querySelectorAll('.tab');
-                tabs.forEach(tab => tab.classList.remove('active'));
-                
-                // Mostrar aba selecionada
-                document.getElementById(tabName).classList.add('active');
-                event.target.classList.add('active');
-            }}
-            
-            // Auto-submit do formulário quando alterar filtros
-            const form = document.getElementById('filtrosForm');
-            const inputs = form.querySelectorAll('input, select');
-            inputs.forEach(input => {{
-                if (input.type !== 'submit' && !input.classList.contains('btn')) {{
-                    input.addEventListener('change', function() {{
-                        // Auto-submit após pequeno delay
-                        setTimeout(() => form.submit(), 100);
-                    }});
-                }}
-            }});
-        </script>
-        '''
-        
-        return gerar_layout_base("Relatórios", conteudo, "relatorios")
-    
     @app.route('/logout')
     @login_required
     def logout():
@@ -2355,7 +1588,6 @@ if __name__ == '__main__':
         print("📱 Acesse: http://localhost:5010")
         print("🏥 Prefeitura Municipal de Cosmópolis")
         print("👤 Login: admin / admin123")
-        print("📊 Sistema completo com saudação corrigida!")
         app.run(debug=True, host='0.0.0.0', port=5010)
     except Exception as e:
         print(f"❌ Erro ao iniciar aplicação: {e}")
