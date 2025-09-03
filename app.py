@@ -1915,10 +1915,24 @@ def create_app():
                     <input type="text" id="origem" name="origem" placeholder="De onde o paciente será buscado" required>
                 </div>
                 
+                
+                <!---
+                
                 <div class="form-group">
                     <label for="destino">Endereço de Destino *</label>
                     <input type="text" id="destino" name="destino" placeholder="Para onde o paciente será levado" required>
                 </div>
+                
+                -->
+                
+                
+                <div class="form-group">
+                    <label for="destino">Endereço de Destino *</label>
+                    <div id="destino-container">
+                        <input type="text" id="destino" name="destino" placeholder="Para onde o paciente será levado" required>
+                    </div>
+                </div>
+                
                 
                 <div class="form-row">
                     <div class="form-group">
@@ -1948,6 +1962,30 @@ def create_app():
                 </div>
             </form>
         </div>
+        
+        <script src="/static/js/cidades.js"></script>
+    <style>
+        .cidade-select {{
+            border: 2px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            font-size: 1rem;
+            background: white;
+            width: 100%;
+            box-sizing: border-box;
+        }}
+        
+        .cidade-select:focus {{
+            border-color: var(--input-focus);
+            outline: none;
+            box-shadow: 0 0 0 3px var(--input-focus-shadow);
+        }}
+        
+        #destino-container input {{
+            margin-top: 0.5rem;
+        }}
+    </style>
+        
         '''
         return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")
     
