@@ -6,6 +6,45 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
 import json
+from functools import wraps
+
+# 🆕 DECORADORES DE PERMISSÃO
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin():
+            flash('Acesso negado! Apenas administradores podem acessar esta página.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def supervisor_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_supervisor():
+            flash('Acesso negado! Permissão insuficiente.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def edit_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.can_edit():
+            flash('Acesso negado! Você não tem permissão para editar.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def delete_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.can_delete():
+            flash('Acesso negado! Apenas administradores podem excluir.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 # ===== FUNÇÕES DE SAUDAÇÃO =====
 def obter_saudacao():
@@ -45,8 +84,9 @@ class Usuario(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     nome_completo = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120))
-    tipo_usuario = db.Column(db.String(20), nullable=False, default='operador')
+    tipo_usuario = db.Column(db.String(20), nullable=False, default='atendente')  # 🆕 MUDANÇA
     ativo = db.Column(db.Boolean, nullable=False, default=True)
+    data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # 🆕 NOVO
     
     def check_password(self, password):
         try:
@@ -60,6 +100,23 @@ class Usuario(db.Model):
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
     
+    # 🆕 NOVOS MÉTODOS DE PERMISSÃO
+    def is_admin(self):
+        return self.tipo_usuario == 'administrador'
+    
+    def is_supervisor(self):
+        return self.tipo_usuario in ['administrador', 'supervisor']
+    
+    def can_edit(self):
+        return self.tipo_usuario in ['administrador', 'supervisor']
+    
+    def can_delete(self):
+        return self.tipo_usuario == 'administrador'
+    
+    def can_manage_users(self):
+        return self.tipo_usuario == 'administrador'
+    
+    # Métodos exigidos pelo Flask-Login
     @property
     def is_authenticated(self):
         return True
@@ -74,7 +131,8 @@ class Usuario(db.Model):
     
     def get_id(self):
         return str(self.id)
-
+        
+        
 class Paciente(db.Model):
     __tablename__ = 'pacientes'
     
@@ -83,8 +141,19 @@ class Paciente(db.Model):
     cpf = db.Column(db.String(14), unique=True, nullable=False)
     telefone = db.Column(db.String(15), nullable=False)
     data_nascimento = db.Column(db.Date, nullable=False)
-    endereco = db.Column(db.Text, nullable=False)
-    cep = db.Column(db.String(9))
+    
+    # 🆕 ENDEREÇO ESTRUTURADO
+    cep = db.Column(db.String(9), nullable=False)
+    logradouro = db.Column(db.String(200), nullable=False)  # Rua/Avenida
+    numero = db.Column(db.String(10), nullable=False)       # Número da casa
+    complemento = db.Column(db.String(100))                 # Apto, casa, etc
+    bairro = db.Column(db.String(100), nullable=False)
+    cidade = db.Column(db.String(100), nullable=False)
+    uf = db.Column(db.String(2), nullable=False)
+    
+    # Campo antigo (mantido apenas por compatibilidade temporária)
+    endereco = db.Column(db.Text)  # Será removido após migração
+    
     cartao_sus = db.Column(db.String(20))
     observacoes = db.Column(db.Text)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
@@ -92,6 +161,16 @@ class Paciente(db.Model):
     
     # Relacionamentos
     agendamentos = db.relationship('Agendamento', backref='paciente', lazy=True)
+    
+    @property
+    def endereco_completo(self):
+        """Retorna o endereço completo formatado"""
+        endereco = f"{self.logradouro}, {self.numero}"
+        if self.complemento:
+            endereco += f", {self.complemento}"
+        endereco += f" - {self.bairro}, {self.cidade}/{self.uf}"
+        endereco += f" - CEP: {self.cep}"
+        return endereco
 
 class Veiculo(db.Model):
     __tablename__ = 'veiculos'
@@ -174,6 +253,13 @@ def verificar_e_criar_banco():
     if not os.path.exists(db_path):
         print("❌ Banco de dados não encontrado. Criando automaticamente...")
         criar_banco_e_usuario()
+        
+        # Criar tabelas
+        db.create_all()
+        print("✅ Tabelas criadas no banco de dados")
+        
+        # 🆕 MIGRAÇÃO DE ENDEREÇOS
+        migrar_enderecos_pacientes()
     else:
         print(f"✅ Banco de dados encontrado: {db_path}")
         verificar_usuario_admin()
@@ -230,8 +316,33 @@ def escape_js_string(s):
         return ''
     return str(s).replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n').replace('\r', '\\r')
 
+
 def gerar_layout_base(titulo, conteudo, ativo=""):
     """Gera o layout base para todas as páginas"""
+    
+    # 🔍 DEBUG TEMPORÁRIO
+    if current_user.is_authenticated:
+        print(f"🔍 DEBUG - Usuario: {current_user.nome_completo}")
+        print(f"🔍 DEBUG - Tipo: {current_user.tipo_usuario}")
+        if hasattr(current_user, "is_admin"):
+            print(f"🔍 DEBUG - is_admin(): {current_user.is_admin()}")
+        else:
+            print("⚠️ DEBUG - current_user não tem método is_admin()")
+    
+    # Badge do tipo de usuário
+    badge_html = ""
+    if current_user.is_authenticated:
+        badge_html = f'<span style="background: var(--primary-color); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; margin-left: 0.5rem;">{current_user.tipo_usuario.upper()}</span>'
+    
+    # Menu de usuários apenas para administradores
+    menu_usuarios_html = ""
+    if current_user.is_authenticated and hasattr(current_user, "is_admin") and current_user.is_admin():
+        active_class = "active" if ativo == "usuarios" else ""
+        menu_usuarios_html = f'<a href="/usuarios" class="{active_class}">👥 Usuários</a>'
+        print("✅ DEBUG - Menu usuarios ADICIONADO!")
+    else:
+        print("❌ DEBUG - Menu usuarios NAO adicionado")
+    
     return f'''
     <html>
     <head>
@@ -324,6 +435,7 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             <h1>🚑 Sistema de Transporte de Pacientes</h1>
             <div class="user-info">
                 Bem-vindo, {current_user.nome_completo}! 
+                {badge_html}
                 <a href="{url_for('logout')}" class="logout">Sair</a>
             </div>
             <div style="clear: both;"></div>
@@ -336,6 +448,7 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             <a href="{url_for('motoristas')}" class="{'active' if ativo == 'motoristas' else ''}">👨‍💼 Motoristas</a>
             <a href="{url_for('agendamentos')}" class="{'active' if ativo == 'agendamentos' else ''}">📅 Agendamentos</a>
             <a href="{url_for('relatorios')}" class="{'active' if ativo == 'relatorios' else ''}">📊 Relatórios</a>
+            {menu_usuarios_html}
         </div>
         
         <div class="container">
@@ -344,6 +457,102 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
     </body>
     </html>
     '''
+
+def migrar_enderecos_pacientes():
+    """Migra endereços antigos para nova estrutura"""
+    try:
+        pacientes = Paciente.query.filter(
+            db.and_(
+                Paciente.endereco.isnot(None),
+                db.or_(
+                    Paciente.logradouro.is_(None),
+                    Paciente.cep.is_(None)
+                )
+            )
+        ).all()
+        
+        for paciente in pacientes:
+            if not paciente.cep:
+                # Endereço padrão para migração
+                paciente.cep = "13150000"
+                paciente.logradouro = paciente.endereco or "Endereço não informado"
+                paciente.numero = "S/N"
+                paciente.bairro = "Centro"
+                paciente.cidade = "Cosmópolis"
+                paciente.uf = "SP"
+        
+        db.session.commit()
+        print(f"✅ Migração de endereços concluída: {len(pacientes)} pacientes atualizados")
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Erro na migração de endereços: {e}")
+
+# 🏠 VALIDAÇÃO DE CEP E ENDEREÇO
+import re
+
+def validar_cep(cep):
+    """Valida formato de CEP brasileiro"""
+    if not cep:
+        return False, "CEP é obrigatório"
+    
+    # Remove caracteres não numéricos
+    cep_numerico = re.sub(r'\D', '', cep)
+    
+    # Deve ter exatamente 8 dígitos
+    if len(cep_numerico) != 8:
+        return False, "CEP deve ter 8 dígitos"
+    
+    # Não pode ser sequencial (00000000, 11111111, etc.)
+    if re.match(r'^(\d)\1{7}$', cep_numerico):
+        return False, "CEP não pode ser sequencial"
+    
+    # CEP não pode começar com 0 (exceto algumas regiões válidas)
+    prefixos_validos = ['01000', '02000', '03000', '04000', '05000', '08000', '09000']
+    if cep_numerico.startswith('0') and not any(cep_numerico.startswith(p) for p in prefixos_validos):
+        return False, "CEP com formato inválido"
+    
+    return True, "CEP válido"
+
+def validar_endereco_completo(cep, logradouro, numero, bairro, cidade, uf):
+    """Valida todos os campos obrigatórios do endereço"""
+    erros = []
+    
+    # Validar CEP
+    cep_valido, msg_cep = validar_cep(cep)
+    if not cep_valido:
+        erros.append(msg_cep)
+    
+    # Validar campos obrigatórios
+    if not logradouro or len(logradouro.strip()) < 3:
+        erros.append("Logradouro deve ter pelo menos 3 caracteres")
+    
+    if not numero or len(numero.strip()) < 1:
+        erros.append("Número é obrigatório")
+    
+    if not bairro or len(bairro.strip()) < 2:
+        erros.append("Bairro deve ter pelo menos 2 caracteres")
+    
+    if not cidade or len(cidade.strip()) < 2:
+        erros.append("Cidade deve ter pelo menos 2 caracteres")
+    
+    if not uf or len(uf.strip()) != 2:
+        erros.append("UF deve ter exatamente 2 caracteres")
+    
+    return len(erros) == 0, erros
+
+def formatar_cep(cep):
+    """Formata CEP no padrão 00000-000"""
+    if not cep:
+        return ""
+    
+    cep_numerico = re.sub(r'\D', '', cep)
+    if len(cep_numerico) == 8:
+        return f"{cep_numerico[:5]}-{cep_numerico[5:]}"
+    
+    return cep
+
+
 
 def create_app():
     global app
@@ -376,6 +585,204 @@ def create_app():
         verificar_e_criar_banco()
     
     # ===== ROTAS =====
+    
+    # 🆕 GERENCIAMENTO DE USUÁRIOS
+    @app.route('/usuarios')
+    @admin_required
+    def usuarios():
+        usuarios_lista = Usuario.query.order_by(Usuario.data_cadastro.desc()).all()
+        
+        usuarios_html = ""
+        if usuarios_lista:
+            usuarios_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👥 Usuários do Sistema</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Username</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data Cadastro</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for usuario in usuarios_lista:
+                status_color = 'color: var(--success-color);' if usuario.ativo else 'color: var(--danger-color);'
+                tipo_color = {
+                    'administrador': 'color: var(--danger-color); font-weight: bold;',
+                    'supervisor': 'color: var(--warning-color); font-weight: bold;',
+                    'atendente': 'color: var(--info-color);'
+                }.get(usuario.tipo_usuario, '')
+                
+                usuarios_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{usuario.nome_completo}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);"><strong>{usuario.username}</strong></td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {tipo_color}">{usuario.tipo_usuario.title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{'Ativo' if usuario.ativo else 'Inativo'}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{usuario.data_cadastro.strftime('%d/%m/%Y') if usuario.data_cadastro else 'N/A'}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                    <a href="/usuarios/editar/{usuario.id}" class="btn btn-warning" style="padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.25rem;">✏️ Editar</a>
+                                    {'<a href="/usuarios/excluir/' + str(usuario.id) + '" class="btn" style="background: var(--danger-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="return confirm(\'Tem certeza que deseja excluir?\')">🗑️ Excluir</a>' if usuario.id != current_user.id else '<span style="color: var(--gray-color); font-size: 0.875rem;">Usuário atual</span>'}
+                                </td>
+                            </tr>
+                '''
+            usuarios_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>👥 Gerenciamento de Usuários</h2>
+            <p>Controle de acesso e permissões do sistema</p>
+            <div style="margin-top: 1rem;">
+                <a href="/usuarios/novo" class="btn">👤 Cadastrar Novo Usuário</a>
+            </div>
+        </div>
+        
+        {usuarios_html}
+        
+        {f'<div class="card"><div class="coming-soon"><div class="icon">👥</div><h3>Nenhum usuário encontrado</h3><p>Comece cadastrando o primeiro usuário!</p></div></div>' if not usuarios_lista else ''}
+        '''
+        return gerar_layout_base("Usuários", conteudo, "usuarios")
+
+    @app.route('/usuarios/novo', methods=['GET', 'POST'])
+    @admin_required
+    def usuarios_novo():
+        if request.method == 'POST':
+            try:
+                # Extrair dados do formulário
+                username = request.form.get('username', '').strip()
+                nome_completo = request.form.get('nome_completo', '').strip()
+                email = request.form.get('email', '').strip()
+                password = request.form.get('password', '').strip()
+                confirm_password = request.form.get('confirm_password', '').strip()
+                tipo_usuario = request.form.get('tipo_usuario', '').strip()
+                
+                # Validação básica
+                if not all([username, nome_completo, password, confirm_password, tipo_usuario]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                if password != confirm_password:
+                    flash('As senhas não coincidem!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                if len(password) < 6:
+                    flash('A senha deve ter pelo menos 6 caracteres!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                # Verificar se username já existe
+                if Usuario.query.filter_by(username=username).first():
+                    flash('Nome de usuário já existe!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                # Criar novo usuário
+                usuario = Usuario(
+                    username=username,
+                    nome_completo=nome_completo,
+                    email=email if email else None,
+                    tipo_usuario=tipo_usuario
+                )
+                usuario.set_password(password)
+                
+                db.session.add(usuario)
+                db.session.commit()
+                
+                flash(f'Usuário "{nome_completo}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('usuarios'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao cadastrar usuário: {str(e)}', 'error')
+                print(f"❌ Erro ao cadastrar usuário: {e}")
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="/dashboard">Dashboard</a> > 
+            <a href="/usuarios">Usuários</a> > 
+            Novo Usuário
+        </div>
+        
+        <div class="page-header">
+            <h2>👤 Cadastrar Novo Usuário</h2>
+            <p>Crie uma nova conta de acesso ao sistema</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="username">Nome de Usuário *</label>
+                        <input type="text" id="username" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="nome_completo">Nome Completo *</label>
+                        <input type="text" id="nome_completo" name="nome_completo" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="email">E-mail</label>
+                        <input type="email" id="email" name="email">
+                    </div>
+                    <div class="form-group">
+                        <label for="tipo_usuario">Tipo de Usuário *</label>
+                        <select id="tipo_usuario" name="tipo_usuario" required>
+                            <option value="">Selecione...</option>
+                            <option value="atendente">🎧 Atendente - Operações básicas</option>
+                            <option value="supervisor">👨‍💼 Supervisor - Pode editar dados</option>
+                            <option value="administrador">👑 Administrador - Acesso total</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="password">Senha *</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="confirm_password">Confirmar Senha *</label>
+                        <input type="password" id="confirm_password" name="confirm_password" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <h4 style="color: var(--primary-color); margin-bottom: 1rem;">Permissões por Tipo:</h4>
+                    <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                        <p><strong>🎧 Atendente:</strong> Criar agendamentos, visualizar dados, operações básicas</p>
+                        <p><strong>👨‍💼 Supervisor:</strong> Todas as permissões do atendente + editar agendamentos e dados</p>
+                        <p><strong>👑 Administrador:</strong> Todas as permissões + excluir dados + gerenciar usuários</p>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">👤 Criar Usuário</button>
+                    <a href="/usuarios" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Novo Usuário", conteudo, "usuarios")
+    
     @app.route('/')
     def index():
         if current_user.is_authenticated:
@@ -1148,18 +1555,52 @@ def create_app():
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">CPF</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Telefone</th>
+                                <!-- 🆕 COLUNA ENDEREÇO -->
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Endereço</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data Cadastro</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Agendamentos</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
                             </tr>
                         </thead>
                         <tbody>
             '''
             for paciente in pacientes_lista:
+                # Contar agendamentos do paciente
+                total_agendamentos = Agendamento.query.filter_by(paciente_id=paciente.id).count()
+                
+                # Botões de ação baseados em permissões
+                acoes_html = ""
+                if current_user.can_edit():
+                    acoes_html += f'<a href="/pacientes/editar/{paciente.id}" class="btn btn-warning" style="padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.25rem;">✏️ Editar</a>'
+                
+                if current_user.can_delete():
+                    if total_agendamentos == 0:
+                        acoes_html += f'<a href="/pacientes/excluir/{paciente.id}" class="btn" style="background: var(--danger-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="return confirmarExclusao(\'paciente\')">🗑️ Excluir</a>'
+                    else:
+                        acoes_html += f'<span class="btn" style="background: var(--gray-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem; cursor: not-allowed;" title="Paciente possui {total_agendamentos} agendamento(s)">🔒 Bloqueado</span>'
+                
+                if not acoes_html:
+                    acoes_html = '<span style="color: var(--gray-color); font-size: 0.875rem;">Visualização</span>'
+                
+                # 🆕 ENDEREÇO COMPLETO ESTRUTURADO
+                endereco_completo = "Endereço não informado"
+                if hasattr(paciente, 'endereco_completo') and paciente.logradouro:
+                    endereco_completo = paciente.endereco_completo
+                elif hasattr(paciente, 'endereco') and paciente.endereco:  # fallback para dados antigos
+                    endereco_completo = paciente.endereco
+                
                 pacientes_html += f'''
                             <tr>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.nome}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.cpf}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.telefone}</td>
+                                <!-- 🆕 NOVA COLUNA ENDEREÇO -->
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); font-size: 0.875rem;" title="{endereco_completo}">{endereco_completo[:50]}{'...' if len(endereco_completo) > 50 else ''}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.data_cadastro.strftime('%d/%m/%Y')}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); text-align: center;">{total_agendamentos}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                    {acoes_html}
+                                </td>
                             </tr>
                 '''
             pacientes_html += '''
@@ -1181,67 +1622,103 @@ def create_app():
         {pacientes_html}
         
         {f'<div class="card"><div class="coming-soon"><div class="icon">👥</div><h3>Nenhum paciente cadastrado</h3><p>Comece cadastrando o primeiro paciente do sistema!</p></div></div>' if not pacientes_lista else ''}
+        
+        <script>
+            function confirmarExclusao(tipo) {{
+                return confirm("Tem certeza que deseja excluir este " + tipo + "? Esta ação não pode ser desfeita!");
+            }}
+        </script>
+        
         '''
         return gerar_layout_base("Pacientes", conteudo, "pacientes")
+
+
     
-    @app.route('/pacientes/cadastrar', methods=['GET', 'POST'])
-    @login_required
-    def pacientes_cadastrar():
-        if request.method == 'POST':
-            try:
-                # Extrair dados do formulário
-                nome = request.form.get('nome', '').strip()
-                cpf = request.form.get('cpf', '').strip()
-                telefone = request.form.get('telefone', '').strip()
-                data_nascimento = request.form.get('data_nascimento')
-                endereco = request.form.get('endereco', '').strip()
-                cep = request.form.get('cep', '').strip()
-                cartao_sus = request.form.get('cartao_sus', '').strip()
-                observacoes = request.form.get('observacoes', '').strip()
-                
-                # Validação básica
-                if not all([nome, cpf, telefone, data_nascimento, endereco]):
-                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
-                    return redirect(url_for('pacientes_cadastrar'))
-                
-                # Verificar se CPF já existe
-                if Paciente.query.filter_by(cpf=cpf).first():
-                    flash('CPF já cadastrado no sistema!', 'error')
-                    return redirect(url_for('pacientes_cadastrar'))
-                
-                # Converter data
-                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
-                
-                # Criar novo paciente
-                paciente = Paciente(
-                    nome=nome,
-                    cpf=cpf,
-                    telefone=telefone,
-                    data_nascimento=data_nascimento,
-                    endereco=endereco,
-                    cep=cep if cep else None,
-                    cartao_sus=cartao_sus if cartao_sus else None,
-                    observacoes=observacoes if observacoes else None
-                )
-                
-                db.session.add(paciente)
-                db.session.commit()
-                
-                flash(f'Paciente "{nome}" cadastrado com sucesso!', 'success')
-                return redirect(url_for('pacientes'))
-                
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Erro ao cadastrar paciente: {str(e)}', 'error')
-                print(f"❌ Erro ao cadastrar paciente: {e}")
-        
-        # Gerar alertas de mensagens flash
-        messages_html = ""
-        for category, message in get_flashed_messages(with_categories=True):
-            alert_class = f"alert-{category}"
-            messages_html += f'<div class="alert {alert_class}">{message}</div>'
-        
-        conteudo = f'''
+# ===== CADASTRO DE PACIENTES =====
+@app.route('/pacientes/cadastrar', methods=['GET', 'POST'])
+@login_required
+def pacientes_cadastrar():
+    if request.method == 'POST':
+        try:
+            # Extrair dados do formulário
+            nome = request.form.get('nome', '').strip()
+            cpf = request.form.get('cpf', '').strip()
+            telefone = request.form.get('telefone', '').strip()
+            data_nascimento = request.form.get('data_nascimento')
+            
+            # 🆕 ENDEREÇO ESTRUTURADO
+            cep = request.form.get('cep', '').strip()
+            logradouro = request.form.get('logradouro', '').strip()
+            numero = request.form.get('numero', '').strip()
+            complemento = request.form.get('complemento', '').strip()
+            bairro = request.form.get('bairro', '').strip()
+            cidade = request.form.get('cidade', '').strip()
+            uf = request.form.get('uf', '').strip()
+            
+            cartao_sus = request.form.get('cartao_sus', '').strip()
+            observacoes = request.form.get('observacoes', '').strip()
+            
+            # 🆕 VALIDAÇÃO COMPLETA DE ENDEREÇO
+            endereco_valido, erros_endereco = validar_endereco_completo(
+                cep, logradouro, numero, bairro, cidade, uf
+            )
+            if not endereco_valido:
+                for erro in erros_endereco:
+                    flash(f'Erro no endereço: {erro}', 'error')
+                return redirect(url_for('pacientes_cadastrar'))
+            
+            # Formatar CEP
+            cep = formatar_cep(cep)
+            
+            # Validação básica de outros campos
+            if not all([nome, cpf, telefone, data_nascimento]):
+                flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                return redirect(url_for('pacientes_cadastrar'))
+            
+            # Verificar se CPF já existe
+            if Paciente.query.filter_by(cpf=cpf).first():
+                flash('CPF já cadastrado no sistema!', 'error')
+                return redirect(url_for('pacientes_cadastrar'))
+            
+            # Converter data
+            data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
+            
+            # Criar novo paciente
+            paciente = Paciente(
+                nome=nome,
+                cpf=cpf,
+                telefone=telefone,
+                data_nascimento=data_nascimento,
+                cep=cep,
+                logradouro=logradouro,
+                numero=numero,
+                complemento=complemento if complemento else None,
+                bairro=bairro,
+                cidade=cidade,
+                uf=uf.upper(),
+                cartao_sus=cartao_sus if cartao_sus else None,
+                observacoes=observacoes if observacoes else None
+            )
+            
+            db.session.add(paciente)
+            db.session.commit()
+            
+            flash(f'Paciente "{nome}" cadastrado com sucesso!', 'success')
+            return redirect(url_for('pacientes'))
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao cadastrar paciente: {str(e)}', 'error')
+            print(f"❌ Erro ao cadastrar paciente: {e}")
+
+    # Gerar alertas de mensagens flash
+    messages_html = ""
+    for category, message in get_flashed_messages(with_categories=True):
+        alert_class = f"alert-{category}"
+        messages_html += f'<div class="alert {alert_class}">{message}</div>'
+    
+    # 🆕 Definição da variável conteudo
+    conteudo = f'''
         <div class="breadcrumb">
             <a href="{url_for('dashboard')}">Dashboard</a> > 
             <a href="{url_for('pacientes')}">Pacientes</a> > 
@@ -1279,20 +1756,60 @@ def create_app():
                     </div>
                 </div>
                 
-                <div class="form-group">
-                    <label for="endereco">Endereço Completo *</label>
-                    <input type="text" id="endereco" name="endereco" placeholder="Rua, número, bairro, cidade" required>
+                <!-- 🆕 ENDEREÇO ESTRUTURADO COM VIACEP -->
+                <h4 style="color: var(--primary-color); margin: 2rem 0 1rem 0; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem;">
+                    🏠 Endereço Residencial
+                </h4>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cep">CEP *</label>
+                        <input type="text" id="cep" name="cep" placeholder="00000-000" required maxlength="9">
+                        <small style="color: #6c757d; font-size: 0.875rem; margin-top: 0.25rem; display: block;">
+                            Digite o CEP para preenchimento automático do endereço
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label for="uf">Estado *</label>
+                        <input type="text" id="uf" name="uf" placeholder="SP" required maxlength="2" style="text-transform: uppercase;">
+                    </div>
                 </div>
                 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="cep">CEP</label>
-                        <input type="text" id="cep" name="cep" placeholder="00000-000">
+                        <label for="logradouro">Logradouro *</label>
+                        <input type="text" id="logradouro" name="logradouro" placeholder="Rua, Avenida, Praça..." required>
                     </div>
                     <div class="form-group">
-                        <label for="cartao_sus">Cartão SUS</label>
-                        <input type="text" id="cartao_sus" name="cartao_sus" placeholder="000 0000 0000 0000">
+                        <label for="numero">Número *</label>
+                        <input type="text" id="numero" name="numero" placeholder="123" required>
                     </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="complemento">Complemento</label>
+                        <input type="text" id="complemento" name="complemento" placeholder="Apto, Casa, Bloco...">
+                    </div>
+                    <div class="form-group">
+                        <label for="bairro">Bairro *</label>
+                        <input type="text" id="bairro" name="bairro" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="cidade">Cidade *</label>
+                    <input type="text" id="cidade" name="cidade" required>
+                </div>
+                
+                <!-- OUTROS DADOS -->
+                <h4 style="color: var(--primary-color); margin: 2rem 0 1rem 0; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem;">
+                    📄 Documentos e Observações
+                </h4>
+                
+                <div class="form-group">
+                    <label for="cartao_sus">Cartão SUS</label>
+                    <input type="text" id="cartao_sus" name="cartao_sus" placeholder="000 0000 0000 0000">
                 </div>
                 
                 <div class="form-group">
@@ -1306,9 +1823,13 @@ def create_app():
                 </div>
             </form>
         </div>
+        
+        <!-- 🆕 INCLUIR VIACEP -->
+        <script src="/static/js/viacep.js"></script>
         '''
-        return gerar_layout_base("Cadastrar Paciente", conteudo, "pacientes")
-    
+    return gerar_layout_base("Cadastrar Paciente", conteudo, "pacientes")
+             
+             
     # ===== VEÍCULOS =====
     @app.route('/veiculos')
     @login_required
@@ -1334,6 +1855,23 @@ def create_app():
                         <tbody>
             '''
             for veiculo in veiculos_lista:
+                # Contar agendamentos do veículo
+                total_agendamentos = Agendamento.query.filter_by(veiculo_id=veiculo.id).count()
+                
+                # Botões de ação baseados em permissões
+                acoes_html = ""
+                if current_user.can_edit():
+                    acoes_html += f'<a href="/veiculos/editar/{veiculo.id}" class="btn btn-warning" style="padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.25rem;">✏️ Editar</a>'
+                
+                if current_user.can_delete():
+                    if total_agendamentos == 0:
+                        acoes_html += f'<a href="/veiculos/excluir/{veiculo.id}" class="btn" style="background: var(--danger-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="return confirmarExclusao(\'veículo\')">🗑️ Excluir</a>'
+                    else:
+                        acoes_html += f'<span class="btn" style="background: var(--gray-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem; cursor: not-allowed;" title="Veículo possui {total_agendamentos} agendamento(s)">🔒 Bloqueado</span>'
+                
+                if not acoes_html:
+                    acoes_html = '<span style="color: var(--gray-color); font-size: 0.875rem;">Visualização</span>'
+                
                 veiculos_html += f'''
                             <tr>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.placa}</td>
@@ -1341,6 +1879,10 @@ def create_app():
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.tipo.replace('_', ' ').title()}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{veiculo.ano}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{'✅ Sim' if veiculo.adaptado else '❌ Não'}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); text-align: center;">{total_agendamentos}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                    {acoes_html}
+                                </td>
                             </tr>
                 '''
             veiculos_html += '''
@@ -1362,8 +1904,16 @@ def create_app():
         {veiculos_html}
         
         {f'<div class="card"><div class="coming-soon"><div class="icon">🚗</div><h3>Nenhum veículo cadastrado</h3><p>Comece cadastrando o primeiro veículo da frota!</p></div></div>' if not veiculos_lista else ''}
-        '''
+        
+         <script>
+            function confirmarExclusao(tipo) {{
+                return confirm("Tem certeza que deseja excluir este " + tipo + "? Esta ação não pode ser desfeita!");
+            }}
+        </script>
+      '''
         return gerar_layout_base("Veículos", conteudo, "veiculos")
+    
+    
     
     @app.route('/veiculos/cadastrar', methods=['GET', 'POST'])
     @login_required
@@ -1524,17 +2074,36 @@ def create_app():
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Categoria</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Vencimento CNH</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Agendamentos</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
                             </tr>
                         </thead>
                         <tbody>
             '''
             for motorista in motoristas_lista:
+                # Contar agendamentos do motorista
+                total_agendamentos = Agendamento.query.filter_by(motorista_id=motorista.id).count()
+                
                 status_color = {
                     'ativo': 'color: var(--success-color);',
                     'inativo': 'color: var(--gray-color);',
                     'ferias': 'color: var(--warning-color);',
                     'licenca': 'color: var(--info-color);'
                 }.get(motorista.status, '')
+                
+                # Botões de ação baseados em permissões
+                acoes_html = ""
+                if current_user.can_edit():
+                    acoes_html += f'<a href="/motoristas/editar/{motorista.id}" class="btn btn-warning" style="padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.25rem;">✏️ Editar</a>'
+                
+                if current_user.can_delete():
+                    if total_agendamentos == 0:
+                        acoes_html += f'<a href="/motoristas/excluir/{motorista.id}" class="btn" style="background: var(--danger-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="return confirmarExclusao(\'motorista\')">🗑️ Excluir</a>'
+                    else:
+                        acoes_html += f'<span class="btn" style="background: var(--gray-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem; cursor: not-allowed;" title="Motorista possui {total_agendamentos} agendamento(s)">🔒 Bloqueado</span>'
+                
+                if not acoes_html:
+                    acoes_html = '<span style="color: var(--gray-color); font-size: 0.875rem;">Visualização</span>'
                 
                 motoristas_html += f'''
                             <tr>
@@ -1543,6 +2112,10 @@ def create_app():
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.categoria_cnh}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{motorista.status.title()}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.vencimento_cnh.strftime('%d/%m/%Y')}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); text-align: center;">{total_agendamentos}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                    {acoes_html}
+                                </td>
                             </tr>
                 '''
             motoristas_html += '''
@@ -1564,6 +2137,13 @@ def create_app():
         {motoristas_html}
         
         {f'<div class="card"><div class="coming-soon"><div class="icon">👨‍💼</div><h3>Nenhum motorista cadastrado</h3><p>Comece cadastrando o primeiro motorista!</p></div></div>' if not motoristas_lista else ''}
+        
+        <script>
+            function confirmarExclusao(tipo) {{
+                return confirm("Tem certeza que deseja excluir este " + tipo + "? Esta ação não pode ser desfeita!");
+            }}
+        </script>
+        
         '''
         return gerar_layout_base("Motoristas", conteudo, "motoristas")
     
@@ -1739,31 +2319,54 @@ def create_app():
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: var(--color-95);">
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data/Hora</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Hora</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Paciente</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
-                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Origem → Destino</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Especialidade</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Motorista</th>
                                 <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
                             </tr>
                         </thead>
                         <tbody>
             '''
             for agendamento in agendamentos_lista:
+                paciente = Paciente.query.get(agendamento.paciente_id)
+                veiculo = Veiculo.query.get(agendamento.veiculo_id) if agendamento.veiculo_id else None
+                motorista = Motorista.query.get(agendamento.motorista_id) if agendamento.motorista_id else None
+                
+                # Cor do status
                 status_color = {
-                    'agendado': 'color: var(--warning-color);',
-                    'confirmado': 'color: var(--info-color);',
-                    'em_andamento': 'color: var(--primary-color);',
+                    'agendado': 'color: var(--info-color);',
+                    'em_andamento': 'color: var(--warning-color);',
                     'concluido': 'color: var(--success-color);',
                     'cancelado': 'color: var(--danger-color);'
                 }.get(agendamento.status, '')
                 
+                # Botões de ação baseados em permissões
+                acoes_html = ""
+                if current_user.can_edit():
+                    acoes_html += f'<a href="/agendamentos/editar/{agendamento.id}" class="btn btn-warning" style="padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.25rem;">✏️ Editar</a>'
+                
+                if current_user.can_delete():
+                    acoes_html += f'<a href="/agendamentos/excluir/{agendamento.id}" class="btn" style="background: var(--danger-color); color: white; padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="return confirmarExclusao(\'agendamento\')">🗑️ Excluir</a>'
+                
+                if not acoes_html:
+                    acoes_html = '<span style="color: var(--gray-color); font-size: 0.875rem;">Visualização</span>'
+                
                 agendamentos_html += f'''
                             <tr>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.data.strftime('%d/%m/%Y')} às {agendamento.hora.strftime('%H:%M')}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.paciente.nome}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.tipo_transporte.title()}</td>
-                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); font-size: 0.875rem;">{agendamento.origem[:30]}{'...' if len(agendamento.origem) > 30 else ''} → {agendamento.destino[:30]}{'...' if len(agendamento.destino) > 30 else ''}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.data.strftime('%d/%m/%Y')}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.hora.strftime('%H:%M')}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{paciente.nome if paciente else 'N/A'}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.tipo_transporte.replace('_', ' ').title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{agendamento.especialidade or 'N/A'}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{motorista.nome if motorista else 'Automático'}</td>
                                 <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {status_color}">{agendamento.status.replace('_', ' ').title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                    {acoes_html}
+                                </td>
                             </tr>
                 '''
             agendamentos_html += '''
@@ -1771,6 +2374,11 @@ def create_app():
                     </table>
                 </div>
             </div>
+            <script>
+            function confirmarExclusao(tipo) {
+                    return confirm(`Tem certeza que deseja excluir este ${tipo}? Esta ação não pode ser desfeita!`);
+                }
+            </script>
             '''
         
         conteudo = f'''
@@ -1785,9 +2393,42 @@ def create_app():
         {agendamentos_html}
         
         {f'<div class="card"><div class="coming-soon"><div class="icon">📅</div><h3>Nenhum agendamento criado</h3><p>Comece criando o primeiro agendamento!</p></div></div>' if not agendamentos_lista else ''}
+        
+           /*
+            <script>
+                function confirmarExclusao(tipo) {{
+                    const confirmacao = confirm('Tem certeza que deseja excluir este ' + tipo + '?\\n\\nEsta ação não pode ser desfeita!');
+                    return confirmacao;
+                }}
+                
+                // Adicionar eventos aos botões de exclusão
+                document.addEventListener('DOMContentLoaded', function() {{
+                    const botoesExcluir = document.querySelectorAll('a[href*="/excluir/"]');
+                    botoesExcluir.forEach(botao => {{
+                        botao.addEventListener('click', function(e) {{
+                            const tipo = this.href.includes('agendamentos') ? 'agendamento' : 'item';
+                            if (!confirmarExclusao(tipo)) {{
+                                e.preventDefault();
+                                return false;
+                            }}
+                        }});
+                    }});
+                }});
+            </script>
+            */
+            <script>
+                function confirmarExclusao(tipo) {{
+                    return confirm("Tem certeza que deseja excluir este " + tipo + "? Esta ação não pode ser desfeita!");
+                }}
+                onclick="return confirmarExclusao('agendamento')"
+            </script>
         '''
+           
         return gerar_layout_base("Agendamentos", conteudo, "agendamentos")
-    
+        
+        
+       
+   
     @app.route('/agendamentos/novo', methods=['GET', 'POST'])
     @login_required
     def agendamentos_novo():
@@ -1805,9 +2446,9 @@ def create_app():
                 motorista_id = request.form.get('motorista_id')
                 observacoes = request.form.get('observacoes', '').strip()
                 
-                # Validação básica
-                if not all([paciente_id, tipo_transporte, data, hora, origem, destino]):
-                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                # Validação básica (agora inclui motorista como obrigatório)
+                if not all([paciente_id, tipo_transporte, data, hora, origem, destino, motorista_id]):
+                    flash('Por favor, preencha todos os campos obrigatórios (incluindo motorista)!', 'error')
                     return redirect(url_for('agendamentos_novo'))
                 
                 # Converter data e hora
@@ -1823,15 +2464,24 @@ def create_app():
                     hora=hora,
                     origem=origem,
                     destino=destino,
-                    veiculo_id=int(veiculo_id) if veiculo_id else None,
-                    motorista_id=int(motorista_id) if motorista_id else None,
+                    veiculo_id=int(veiculo_id) if veiculo_id else None,  # OPCIONAL
+                    motorista_id=int(motorista_id),  # OBRIGATÓRIO
                     observacoes=observacoes if observacoes else None
                 )
                 
                 db.session.add(agendamento)
                 db.session.commit()
                 
+                # Log detalhado
+                motorista = Motorista.query.get(motorista_id)
+                veiculo = Veiculo.query.get(veiculo_id) if veiculo_id else None
+                
                 print(f"✅ Agendamento criado: {agendamento.id} para {data} às {hora}")
+                print(f"👨‍💼 Motorista selecionado: {motorista.nome if motorista else 'N/A'}")
+                if veiculo:
+                    print(f"🚗 Veículo selecionado: {veiculo.marca} {veiculo.modelo} - {veiculo.placa}")
+                else:
+                    print(f"🚗 Veículo: Sistema escolherá automaticamente")
                 if especialidade:
                     print(f"📝 Especialidade: {especialidade}")
                 
@@ -1915,7 +2565,7 @@ def create_app():
                 <div class="form-group">
                     <label for="especialidade">Especialidade Médica</label>
                     <div id="especialidade-container">
-                        <input type="text" id="especialidade" name="especialidade" placeholder="Para qual especialidade médica">
+                        <input type="text" id="especialidade" name="especialidade" placeholder="">
                     </div>
                 </div>
                 
@@ -1938,24 +2588,31 @@ def create_app():
                 <div class="form-group">
                     <label for="destino">Endereço de Destino *</label>
                     <div id="destino-container">
-                        <input type="text" id="destino" name="destino" placeholder="Para onde o paciente será levado" required>
+                        <input type="text" id="destino" name="destino" placeholder="" required>
                     </div>
                 </div>
                 
+                <!-- CAMPOS DE VEÍCULO E MOTORISTA ATUALIZADOS -->
                 <div class="form-row">
                     <div class="form-group">
                         <label for="veiculo_id">Veículo</label>
                         <select id="veiculo_id" name="veiculo_id">
-                            <option value="">Sistema escolherá automaticamente</option>
+                            <option value="">🚗 Sistema escolherá automaticamente</option>
                             {veiculos_options}
                         </select>
+                        <small style="color: #6c757d; font-size: 0.875rem; margin-top: 0.25rem; display: block;">
+                            Opcional: Deixe em branco para seleção automática baseada na disponibilidade
+                        </small>
                     </div>
                     <div class="form-group">
-                        <label for="motorista_id">Motorista</label>
-                        <select id="motorista_id" name="motorista_id">
-                            <option value="">Sistema escolherá automaticamente</option>
+                        <label for="motorista_id">Motorista *</label>
+                        <select id="motorista_id" name="motorista_id" required>
+                            <option value="">Selecione o motorista...</option>
                             {motoristas_options}
                         </select>
+                        <small style="color: #dc3545; font-size: 0.875rem; margin-top: 0.25rem; display: block;">
+                            Obrigatório: Escolha qual motorista fará o transporte
+                        </small>
                     </div>
                 </div>
                 
@@ -1996,7 +2653,6 @@ def create_app():
         </style>
         '''
         return gerar_layout_base("Novo Agendamento", conteudo, "agendamentos")    
-    
     
     # ===== RELATÓRIOS =====
     @app.route('/relatorios')
@@ -2391,9 +3047,780 @@ def create_app():
         session.pop('_flashes', None)
         flash('Logout realizado com sucesso!', 'success')
         return redirect(url_for('login'))
+
+
+    
+    # 🆕 EDIÇÃO DE AGENDAMENTOS
+    @app.route('/agendamentos/editar/<int:id>', methods=['GET', 'POST'])
+    @edit_required
+    def agendamentos_editar(id):
+        agendamento = Agendamento.query.get_or_404(id)
+        
+        if request.method == 'POST':
+            try:
+                # Extrair dados do formulário
+                paciente_id = int(request.form.get('paciente_id', 0))
+                tipo_transporte = request.form.get('tipo_transporte', '').strip()
+                especialidade = request.form.get('especialidade', '').strip()
+                data = request.form.get('data')
+                hora = request.form.get('hora')
+                origem = request.form.get('origem', '').strip()
+                destino = request.form.get('destino', '').strip()
+                veiculo_id = request.form.get('veiculo_id')
+                motorista_id = request.form.get('motorista_id')
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([paciente_id, tipo_transporte, data, hora, origem, destino, motorista_id]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('agendamentos_editar', id=id))
+                
+                # Converter data e hora
+                data = datetime.strptime(data, '%Y-%m-%d').date()
+                hora = datetime.strptime(hora, '%H:%M').time()
+                
+                # Atualizar agendamento
+                agendamento.paciente_id = paciente_id
+                agendamento.tipo_transporte = tipo_transporte
+                agendamento.especialidade = especialidade if especialidade else None
+                agendamento.data = data
+                agendamento.hora = hora
+                agendamento.origem = origem
+                agendamento.destino = destino
+                agendamento.veiculo_id = int(veiculo_id) if veiculo_id else None
+                agendamento.motorista_id = int(motorista_id)
+                agendamento.observacoes = observacoes if observacoes else None
+                
+                db.session.commit()
+                
+                flash('Agendamento atualizado com sucesso!', 'success')
+                return redirect(url_for('agendamentos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao atualizar agendamento: {str(e)}', 'error')
+                print(f"❌ Erro ao atualizar agendamento: {e}")
+        
+        # Buscar dados para os selects
+        pacientes = Paciente.query.filter_by(ativo=True).order_by(Paciente.nome).all()
+        veiculos = Veiculo.query.filter_by(ativo=True).order_by(Veiculo.placa).all()
+        motoristas = Motorista.query.filter_by(status='ativo').order_by(Motorista.nome).all()
+        
+        # Gerar options para os selects com dados atuais selecionados
+        pacientes_options = ""
+        for p in pacientes:
+            selected = 'selected' if p.id == agendamento.paciente_id else ''
+            pacientes_options += f'<option value="{p.id}" {selected}>{p.nome} - CPF: {p.cpf}</option>'
+        
+        veiculos_options = ""
+        for v in veiculos:
+            selected = 'selected' if v.id == agendamento.veiculo_id else ''
+            veiculos_options += f'<option value="{v.id}" {selected}>{v.marca} {v.modelo} - {v.placa}</option>'
+        
+        motoristas_options = ""
+        for m in motoristas:
+            selected = 'selected' if m.id == agendamento.motorista_id else ''
+            motoristas_options += f'<option value="{m.id}" {selected}>{m.nome} - CNH: {m.categoria_cnh}</option>'
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        # Formatar dados atuais para os campos
+        data_atual = agendamento.data.strftime('%Y-%m-%d')
+        hora_atual = agendamento.hora.strftime('%H:%M')
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="/dashboard">Dashboard</a> > 
+            <a href="/agendamentos">Agendamentos</a> > 
+            Editar Agendamento
+        </div>
+        
+        <div class="page-header">
+            <h2>✏️ Editar Agendamento</h2>
+            <p>Altere os dados do agendamento #{agendamento.id}</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="paciente_id">Paciente *</label>
+                        <select id="paciente_id" name="paciente_id" required>
+                            <option value="">Selecione o paciente...</option>
+                            {pacientes_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tipo_transporte">Tipo de Transporte *</label>
+                        <select id="tipo_transporte" name="tipo_transporte" required>
+                            <option value="">Selecione...</option>
+                            <option value="consulta" {'selected' if agendamento.tipo_transporte == 'consulta' else ''}>Consulta Médica</option>
+                            <option value="exame" {'selected' if agendamento.tipo_transporte == 'exame' else ''}>Exame</option>
+                            <option value="cirurgia" {'selected' if agendamento.tipo_transporte == 'cirurgia' else ''}>Cirurgia</option>
+                            <option value="tratamento" {'selected' if agendamento.tipo_transporte == 'tratamento' else ''}>Tratamento</option>
+                            <option value="emergencia" {'selected' if agendamento.tipo_transporte == 'emergencia' else ''}>Emergência</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="especialidade">Especialidade Médica</label>
+                    <div id="especialidade-container">
+                        <input type="text" id="especialidade" name="especialidade" value="{agendamento.especialidade or ''}" placeholder="">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="data">Data *</label>
+                        <input type="date" id="data" name="data" value="{data_atual}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="hora">Hora *</label>
+                        <input type="time" id="hora" name="hora" value="{hora_atual}" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="origem">Endereço de Origem *</label>
+                    <input type="text" id="origem" name="origem" value="{agendamento.origem}" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="destino">Endereço de Destino *</label>
+                    <div id="destino-container">
+                        <input type="text" id="destino" name="destino" value="{agendamento.destino}" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="veiculo_id">Veículo</label>
+                        <select id="veiculo_id" name="veiculo_id">
+                            <option value="">🚗 Sistema escolherá automaticamente</option>
+                            {veiculos_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="motorista_id">Motorista *</label>
+                        <select id="motorista_id" name="motorista_id" required>
+                            <option value="">Selecione o motorista...</option>
+                            {motoristas_options}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes">Observações</label>
+                    <textarea id="observacoes" name="observacoes" rows="3">{agendamento.observacoes or ''}</textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">✅ Salvar Alterações</button>
+                    <a href="/agendamentos" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        
+        <script src="/static/js/cidades.js"></script>
+        <script src="/static/js/especialidades.js"></script>
+        '''
+        return gerar_layout_base("Editar Agendamento", conteudo, "agendamentos")
+
+    # 🆕 EXCLUSÃO DE AGENDAMENTOS
+    @app.route('/agendamentos/excluir/<int:id>')
+    @delete_required
+    def agendamentos_excluir(id):
+        try:
+            agendamento = Agendamento.query.get_or_404(id)
+            
+            print(f"🗑️ Excluindo agendamento: {agendamento.id} - {agendamento.data} às {agendamento.hora}")
+            
+            db.session.delete(agendamento)
+            db.session.commit()
+            
+            flash('Agendamento excluído com sucesso!', 'success')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao excluir agendamento: {str(e)}', 'error')
+            print(f"❌ Erro ao excluir agendamento: {e}")
+        
+        return redirect(url_for('agendamentos'))
+        
+        
+    # 🆕 EDIÇÃO DE PACIENTES
+    @app.route('/pacientes/editar/<int:id>', methods=['GET', 'POST'])
+    @edit_required
+    def pacientes_editar(id):
+        paciente = Paciente.query.get_or_404(id)
+        
+        if request.method == 'POST':
+            try:
+                # Extrair dados do formulário
+                nome = request.form.get('nome', '').strip()
+                cpf = request.form.get('cpf', '').strip()
+                telefone = request.form.get('telefone', '').strip()
+                data_nascimento = request.form.get('data_nascimento')
+                
+                # 🆕 ENDEREÇO ESTRUTURADO
+                cep = request.form.get('cep', '').strip()
+                logradouro = request.form.get('logradouro', '').strip()
+                numero = request.form.get('numero', '').strip()
+                complemento = request.form.get('complemento', '').strip()
+                bairro = request.form.get('bairro', '').strip()
+                cidade = request.form.get('cidade', '').strip()
+                uf = request.form.get('uf', '').strip()
+                
+                cartao_sus = request.form.get('cartao_sus', '').strip()
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # 🆕 VALIDAÇÃO COMPLETA DE ENDEREÇO
+                endereco_valido, erros_endereco = validar_endereco_completo(
+                    cep, logradouro, numero, bairro, cidade, uf
+                )
+                
+                if not endereco_valido:
+                    for erro in erros_endereco:
+                        flash(f'Erro no endereço: {erro}', 'error')
+                    return redirect(url_for('pacientes_editar', id=id))
+                
+                # Formatar CEP
+                cep = formatar_cep(cep)
+                
+                # Verificar se CPF já existe (exceto o próprio)
+                cpf_existente = Paciente.query.filter(Paciente.cpf == cpf, Paciente.id != id).first()
+                if cpf_existente:
+                    flash('CPF já cadastrado para outro paciente!', 'error')
+                    return redirect(url_for('pacientes_editar', id=id))
+                
+                # Converter data
+                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
+                
+                # Atualizar paciente
+                paciente.nome = nome
+                paciente.cpf = cpf
+                paciente.telefone = telefone
+                paciente.data_nascimento = data_nascimento
+                paciente.cep = cep
+                paciente.logradouro = logradouro
+                paciente.numero = numero
+                paciente.complemento = complemento if complemento else None
+                paciente.bairro = bairro
+                paciente.cidade = cidade
+                paciente.uf = uf.upper()
+                paciente.cartao_sus = cartao_sus if cartao_sus else None
+                paciente.observacoes = observacoes if observacoes else None
+                
+                db.session.commit()
+                
+                flash(f'Paciente "{nome}" atualizado com sucesso!', 'success')
+                return redirect(url_for('pacientes'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao atualizar paciente: {str(e)}', 'error')
+                print(f"❌ Erro ao atualizar paciente: {e}")
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        # Formatar data para o campo
+        data_nascimento_str = paciente.data_nascimento.strftime('%Y-%m-%d')
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="/dashboard">Dashboard</a> > 
+            <a href="/pacientes">Pacientes</a> > 
+            Editar Paciente
+        </div>
+        
+        <div class="page-header">
+            <h2>✏️ Editar Paciente</h2>
+            <p>Altere os dados do paciente {paciente.nome}</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="nome">Nome Completo *</label>
+                        <input type="text" id="nome" name="nome" value="{paciente.nome}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="cpf">CPF *</label>
+                        <input type="text" id="cpf" name="cpf" value="{paciente.cpf}" placeholder="000.000.000-00" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="telefone">Telefone *</label>
+                        <input type="tel" id="telefone" name="telefone" value="{paciente.telefone}" placeholder="(00) 00000-0000" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="data_nascimento">Data de Nascimento *</label>
+                        <input type="date" id="data_nascimento" name="data_nascimento" value="{data_nascimento_str}" required>
+                    </div>
+                </div>
+                
+                <!-- 🆕 ENDEREÇO ESTRUTURADO -->
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cep">CEP *</label>
+                        <input type="text" id="cep" name="cep" value="{paciente.cep or ''}" placeholder="00000-000" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="logradouro">Logradouro *</label>
+                        <input type="text" id="logradouro" name="logradouro" value="{paciente.logradouro or ''}" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="numero">Número *</label>
+                        <input type="text" id="numero" name="numero" value="{paciente.numero or ''}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="complemento">Complemento</label>
+                        <input type="text" id="complemento" name="complemento" value="{paciente.complemento or ''}">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="bairro">Bairro *</label>
+                        <input type="text" id="bairro" name="bairro" value="{paciente.bairro or ''}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="cidade">Cidade *</label>
+                        <input type="text" id="cidade" name="cidade" value="{paciente.cidade or ''}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="uf">UF *</label>
+                        <input type="text" id="uf" name="uf" value="{paciente.uf or ''}" maxlength="2" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cartao_sus">Cartão SUS</label>
+                        <input type="text" id="cartao_sus" name="cartao_sus" value="{paciente.cartao_sus or ''}" placeholder="000 0000 0000 0000">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes">Necessidades Especiais / Observações</label>
+                    <textarea id="observacoes" name="observacoes" rows="4">{paciente.observacoes or ''}</textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">✅ Salvar Alterações</button>
+                    <a href="/pacientes" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Editar Paciente", conteudo, "pacientes")
+
+    # 🆕 EXCLUSÃO DE PACIENTES
+    @app.route('/pacientes/excluir/<int:id>')
+    @delete_required
+    def pacientes_excluir(id):
+        try:
+            paciente = Paciente.query.get_or_404(id)
+            
+            # Verificar se o paciente tem agendamentos
+            agendamentos_count = Agendamento.query.filter_by(paciente_id=id).count()
+            if agendamentos_count > 0:
+                flash(f'Não é possível excluir o paciente "{paciente.nome}" pois possui {agendamentos_count} agendamento(s) vinculado(s).', 'error')
+                return redirect(url_for('pacientes'))
+            
+            print(f"🗑️ Excluindo paciente: {paciente.id} - {paciente.nome}")
+            
+            db.session.delete(paciente)
+            db.session.commit()
+            
+            flash(f'Paciente "{paciente.nome}" excluído com sucesso!', 'success')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao excluir paciente: {str(e)}', 'error')
+            print(f"❌ Erro ao excluir paciente: {e}")
+        
+        return redirect(url_for('pacientes'))
+    
+    # 🆕 EDIÇÃO DE VEÍCULOS
+    @app.route('/veiculos/editar/<int:id>', methods=['GET', 'POST'])
+    @edit_required
+    def veiculos_editar(id):
+        veiculo = Veiculo.query.get_or_404(id)
+        
+        if request.method == 'POST':
+            try:
+                # Extrair dados do formulário
+                placa = request.form.get('placa', '').strip().upper()
+                marca = request.form.get('marca', '').strip()
+                modelo = request.form.get('modelo', '').strip()
+                ano = int(request.form.get('ano', 0))
+                cor = request.form.get('cor', '').strip()
+                tipo = request.form.get('tipo', '').strip()
+                capacidade = request.form.get('capacidade')
+                adaptado = request.form.get('adaptado') == 'sim'
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([placa, marca, modelo, ano, tipo]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('veiculos_editar', id=id))
+                
+                # Verificar se placa já existe (exceto o próprio)
+                placa_existente = Veiculo.query.filter(Veiculo.placa == placa, Veiculo.id != id).first()
+                if placa_existente:
+                    flash('Placa já cadastrada para outro veículo!', 'error')
+                    return redirect(url_for('veiculos_editar', id=id))
+                
+                # Atualizar veículo
+                veiculo.placa = placa
+                veiculo.marca = marca
+                veiculo.modelo = modelo
+                veiculo.ano = ano
+                veiculo.cor = cor if cor else None
+                veiculo.tipo = tipo
+                veiculo.capacidade = int(capacidade) if capacidade else None
+                veiculo.adaptado = adaptado
+                veiculo.observacoes = observacoes if observacoes else None
+                
+                db.session.commit()
+                
+                flash(f'Veículo "{placa}" atualizado com sucesso!', 'success')
+                return redirect(url_for('veiculos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao atualizar veículo: {str(e)}', 'error')
+                print(f"❌ Erro ao atualizar veículo: {e}")
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="/dashboard">Dashboard</a> > 
+            <a href="/veiculos">Veículos</a> > 
+            Editar Veículo
+        </div>
+        
+        <div class="page-header">
+            <h2>✏️ Editar Veículo</h2>
+            <p>Altere os dados do veículo {veiculo.placa}</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="placa">Placa *</label>
+                        <input type="text" id="placa" name="placa" value="{veiculo.placa}" placeholder="ABC-1234" required style="text-transform: uppercase;">
+                    </div>
+                    <div class="form-group">
+                        <label for="marca">Marca *</label>
+                        <input type="text" id="marca" name="marca" value="{veiculo.marca}" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="modelo">Modelo *</label>
+                        <input type="text" id="modelo" name="modelo" value="{veiculo.modelo}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ano">Ano *</label>
+                        <input type="number" id="ano" name="ano" value="{veiculo.ano}" min="1980" max="2030" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cor">Cor</label>
+                        <input type="text" id="cor" name="cor" value="{veiculo.cor or ''}">
+                    </div>
+                    <div class="form-group">
+                        <label for="tipo">Tipo de Veículo *</label>
+                        <select id="tipo" name="tipo" required>
+                            <option value="">Selecione...</option>
+                            <option value="ambulancia" {'selected' if veiculo.tipo == 'ambulancia' else ''}>Ambulância</option>
+                            <option value="van" {'selected' if veiculo.tipo == 'van' else ''}>Van</option>
+                            <option value="micro_onibus" {'selected' if veiculo.tipo == 'micro_onibus' else ''}>Micro-ônibus</option>
+                            <option value="carro" {'selected' if veiculo.tipo == 'carro' else ''}>Carro</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="capacidade">Capacidade de Passageiros</label>
+                        <input type="number" id="capacidade" name="capacidade" value="{veiculo.capacidade or ''}" min="1" max="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="adaptado">Adaptado para PCD</label>
+                        <select id="adaptado" name="adaptado">
+                            <option value="nao" {'selected' if not veiculo.adaptado else ''}>Não</option>
+                            <option value="sim" {'selected' if veiculo.adaptado else ''}>Sim</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes">Observações</label>
+                    <textarea id="observacoes" name="observacoes" rows="3">{veiculo.observacoes or ''}</textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">✅ Salvar Alterações</button>
+                    <a href="/veiculos" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Editar Veículo", conteudo, "veiculos")
+
+    # 🆕 EXCLUSÃO DE VEÍCULOS
+    @app.route('/veiculos/excluir/<int:id>')
+    @delete_required
+    def veiculos_excluir(id):
+        try:
+            veiculo = Veiculo.query.get_or_404(id)
+            
+            # Verificar se o veículo tem agendamentos
+            agendamentos_count = Agendamento.query.filter_by(veiculo_id=id).count()
+            if agendamentos_count > 0:
+                flash(f'Não é possível excluir o veículo "{veiculo.placa}" pois possui {agendamentos_count} agendamento(s) vinculado(s).', 'error')
+                return redirect(url_for('veiculos'))
+            
+            print(f"🗑️ Excluindo veículo: {veiculo.id} - {veiculo.placa}")
+            
+            db.session.delete(veiculo)
+            db.session.commit()
+            
+            flash(f'Veículo "{veiculo.placa}" excluído com sucesso!', 'success')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao excluir veículo: {str(e)}', 'error')
+            print(f"❌ Erro ao excluir veículo: {e}")
+        
+        return redirect(url_for('veiculos'))
+    
+    # 🆕 EDIÇÃO DE MOTORISTAS
+    @app.route('/motoristas/editar/<int:id>', methods=['GET', 'POST'])
+    @edit_required
+    def motoristas_editar(id):
+        motorista = Motorista.query.get_or_404(id)
+        
+        if request.method == 'POST':
+            try:
+                # Extrair dados do formulário
+                nome = request.form.get('nome', '').strip()
+                cpf = request.form.get('cpf', '').strip()
+                telefone = request.form.get('telefone', '').strip()
+                data_nascimento = request.form.get('data_nascimento')
+                cnh = request.form.get('cnh', '').strip()
+                categoria_cnh = request.form.get('categoria_cnh', '').strip()
+                vencimento_cnh = request.form.get('vencimento_cnh')
+                endereco = request.form.get('endereco', '').strip()
+                status = request.form.get('status', 'ativo').strip()
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                # Validação básica
+                if not all([nome, cpf, telefone, data_nascimento, cnh, categoria_cnh, vencimento_cnh]):
+                    flash('Por favor, preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('motoristas_editar', id=id))
+                
+                # Verificar se CPF ou CNH já existem (exceto o próprio)
+                cpf_existente = Motorista.query.filter(Motorista.cpf == cpf, Motorista.id != id).first()
+                if cpf_existente:
+                    flash('CPF já cadastrado para outro motorista!', 'error')
+                    return redirect(url_for('motoristas_editar', id=id))
+                
+                cnh_existente = Motorista.query.filter(Motorista.cnh == cnh, Motorista.id != id).first()
+                if cnh_existente:
+                    flash('CNH já cadastrada para outro motorista!', 'error')
+                    return redirect(url_for('motoristas_editar', id=id))
+                
+                # Converter datas
+                data_nascimento = datetime.strptime(data_nascimento, '%Y-%m-%d').date()
+                vencimento_cnh = datetime.strptime(vencimento_cnh, '%Y-%m-%d').date()
+                
+                # Atualizar motorista
+                motorista.nome = nome
+                motorista.cpf = cpf
+                motorista.telefone = telefone
+                motorista.data_nascimento = data_nascimento
+                motorista.cnh = cnh
+                motorista.categoria_cnh = categoria_cnh
+                motorista.vencimento_cnh = vencimento_cnh
+                motorista.endereco = endereco if endereco else None
+                motorista.status = status
+                motorista.observacoes = observacoes if observacoes else None
+                
+                db.session.commit()
+                
+                flash(f'Motorista "{nome}" atualizado com sucesso!', 'success')
+                return redirect(url_for('motoristas'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao atualizar motorista: {str(e)}', 'error')
+                print(f"❌ Erro ao atualizar motorista: {e}")
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        # Formatar datas para os campos
+        data_nascimento_str = motorista.data_nascimento.strftime('%Y-%m-%d')
+        vencimento_cnh_str = motorista.vencimento_cnh.strftime('%Y-%m-%d')
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="/dashboard">Dashboard</a> > 
+            <a href="/motoristas">Motoristas</a> > 
+            Editar Motorista
+        </div>
+        
+        <div class="page-header">
+            <h2>✏️ Editar Motorista</h2>
+            <p>Altere os dados do motorista {motorista.nome}</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="nome">Nome Completo *</label>
+                        <input type="text" id="nome" name="nome" value="{motorista.nome}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="cpf">CPF *</label>
+                        <input type="text" id="cpf" name="cpf" value="{motorista.cpf}" placeholder="000.000.000-00" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="telefone">Telefone *</label>
+                        <input type="tel" id="telefone" name="telefone" value="{motorista.telefone}" placeholder="(00) 00000-0000" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="data_nascimento">Data de Nascimento *</label>
+                        <input type="date" id="data_nascimento" name="data_nascimento" value="{data_nascimento_str}" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cnh">Número da CNH *</label>
+                        <input type="text" id="cnh" name="cnh" value="{motorista.cnh}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="categoria_cnh">Categoria CNH *</label>
+                        <select id="categoria_cnh" name="categoria_cnh" required>
+                            <option value="">Selecione...</option>
+                            <option value="A" {'selected' if motorista.categoria_cnh == 'A' else ''}>A - Motocicleta</option>
+                            <option value="B" {'selected' if motorista.categoria_cnh == 'B' else ''}>B - Carro</option>
+                            <option value="C" {'selected' if motorista.categoria_cnh == 'C' else ''}>C - Caminhão</option>
+                            <option value="D" {'selected' if motorista.categoria_cnh == 'D' else ''}>D - Ônibus</option>
+                            <option value="E" {'selected' if motorista.categoria_cnh == 'E' else ''}>E - Carreta</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="vencimento_cnh">Vencimento da CNH *</label>
+                        <input type="date" id="vencimento_cnh" name="vencimento_cnh" value="{vencimento_cnh_str}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="status">Status *</label>
+                        <select id="status" name="status" required>
+                            <option value="ativo" {'selected' if motorista.status == 'ativo' else ''}>Ativo</option>
+                            <option value="inativo" {'selected' if motorista.status == 'inativo' else ''}>Inativo</option>
+                            <option value="ferias" {'selected' if motorista.status == 'ferias' else ''}>Férias</option>
+                            <option value="licenca" {'selected' if motorista.status == 'licenca' else ''}>Licença</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="endereco">Endereço Completo</label>
+                    <input type="text" id="endereco" name="endereco" value="{motorista.endereco or ''}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes">Observações</label>
+                    <textarea id="observacoes" name="observacoes" rows="3">{motorista.observacoes or ''}</textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">✅ Salvar Alterações</button>
+                    <a href="/motoristas" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Editar Motorista", conteudo, "motoristas")
+
+# 🆕 EXCLUSÃO DE MOTORISTAS
+    @app.route('/motoristas/excluir/<int:id>')
+    @delete_required
+    def motoristas_excluir(id):
+        try:
+            motorista = Motorista.query.get_or_404(id)
+            
+            # Verificar se o motorista tem agendamentos
+            agendamentos_count = Agendamento.query.filter_by(motorista_id=id).count()
+            if agendamentos_count > 0:
+                flash(f'Não é possível excluir o motorista "{motorista.nome}" pois possui {agendamentos_count} agendamento(s) vinculado(s).', 'error')
+                return redirect(url_for('motoristas'))
+            
+            print(f"🗑️ Excluindo motorista: {motorista.id} - {motorista.nome}")
+            
+            db.session.delete(motorista)
+            db.session.commit()
+            
+            flash(f'Motorista "{motorista.nome}" excluído com sucesso!', 'success')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao excluir motorista: {str(e)}', 'error')
+            print(f"❌ Erro ao excluir motorista: {e}")
+        
+        return redirect(url_for('motoristas'))
     
     return app
-
+    
+    
 if __name__ == '__main__':
     print("🚀 Iniciando Sistema de Transporte de Pacientes...")
     

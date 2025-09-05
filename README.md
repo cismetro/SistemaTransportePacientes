@@ -405,3 +405,115 @@ Vá em "📊 Relatórios"
 Teste os filtros e impressão!
 Agora você tem um sistema completo de relatórios gerenciais! 📊✨
 
+
+
+TESTAT A PARTIR DAQUI ... DIA 05/09
+
+
+Sistema de Permissões implementado:
+🎧 ATENDENTE (acesso padrão): Marce4la 123456
+✅ PODE:
+
+Criar agendamentos
+Visualizar pacientes, veículos, motoristas
+Gerar relatórios
+Operações básicas do sistema
+❌ NÃO PODE: ok ok ok ok
+
+❌ Editar dados existentes
+❌ Excluir qualquer registro
+❌ Gerenciar usuários
+❌ Ver menu "Usuários"
+👨‍💼 SUPERVISOR:
+✅ PODE:
+
+Tudo que o atendente pode
+✅ Editar agendamentos
+✅ Editar pacientes, veículos, motoristas
+✅ Badge "SUPERVISOR" aparece
+❌ NÃO PODE:
+
+❌ Excluir registros
+❌ Gerenciar usuários
+👑 ADMINISTRADOR:
+✅ PODE TUDO:
+
+✅ Criar, editar, visualizar
+✅ EXCLUIR qualquer registro
+✅ Gerenciar usuários
+✅ Menu "👥 Usuários" aparece
+✅ Badge "ADMINISTRADOR" aparece
+
+🔐 Para testar as permissões:
+Crie um usuário atendente via /usuarios/novo
+Faça logout do admin
+Login com o atendente
+Observe que:
+❌ Não aparece menu "Usuários"
+❌ Badge mostra "ATENDENTE"
+❌ Botões de excluir ficam ocultos/desabilitados
+
+
+TIPO DE USUÁRIOS
+Atendente: Criar agendamentos, visualizar dados, operações básicas
+Supervisor: Todas as permissões do atendente + editar agendamentos e dados
+Administrador: Todas as permissões + excluir dados + gerenciar usuários
+
+TESTE COMPLETO DO SISTEMA:
+🔍 Teste estas funcionalidades:
+
+👑 Como ADMINISTRADOR:
+
+✅ Vê todos os botões "Editar" e "Excluir"
+✅ Acessa menu "👥 Usuários"
+✅ Badge "ADMINISTRADOR" aparece
+✅ Pode gerenciar todos os módulos
+👨‍💼 Como SUPERVISOR:
+
+✅ Vê botões "Editar" (mas não "Excluir")
+❌ NÃO vê menu "Usuários"
+✅ Badge "SUPERVISOR" aparece
+🎧 Como ATENDENTE:
+
+❌ Vê apenas "Visualização"
+❌ NÃO vê botões de editar/excluir
+❌ NÃO vê menu "Usuários"
+✅ Badge "ATENDENTE" aparece
+🔐 Proteções implementadas:
+
+✅ Itens com agendamentos aparecem "🔒 Bloqueado"
+✅ Confirmação antes de excluir
+✅ Validação de permissões nas rotas
+✅ Mensagens de erro informativas
+🎯 Me confirme como está funcionando e se há algum problema para ajustarmos!
+
+
+Funcionalidades implementadas:
+✅ Endereço estruturado (logradouro, número, bairro, cidade, UF)
+✅ Busca automática por CEP via API ViaCEP
+✅ Validação em tempo real no frontend
+✅ Validação robusta no backend
+✅ Máscara automática de CEP (00000-000)
+✅ Mensagens de erro e sucesso
+✅ Exibição do endereço completo na listagem
+
+
+
+
+
+
+
+Preciso como requisito importante é que o usuario ou a atentende ira atrela um veiculo para transporte..
+ai o contador deverar acessar os veiculos usados no mes para poder efetuar o pagamento.. 
+FAZER UM COMPARATIVO DA FATURA... CHECAR SE O VEICULO REALMENTE PRESTOU SERVICO NO MES.. PRA QUE NÃO HAJA DIVERGENCIA NOS VEICULOS.. 
+e novo agemdamendo ou em outro lugar qualquer preciso que isso seja contabilizado para que o contador tenha acesso as estas informações.. o que vc me sugere..
+
+E TBM...
+
+O cadastro de veiculo deve ser dividido em dois:
+Pertence a prefeitura municipal de cosmopolis ou seja Veículo Proprio
+Pertence à empresa terceirizada ou seja não é da prefeitura.. vehículo terceiro 
+
+
+tbm preciso implantar o Endereço de origem Usar a api Via Cep
+
