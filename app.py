@@ -32,6 +32,29 @@ def obter_emoji_horario():
     else:
         return "🌙"
 
+
+from functools import wraps
+
+# 🆕 DECORADORES DE PERMISSÃO FINANCEIRA
+def contador_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.can_manage_finances():
+            flash('Acesso negado! Apenas contadores e administradores podem acessar esta página.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def finance_view_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.can_view_finances():
+            flash('Acesso negado! Permissão insuficiente para visualizar dados financeiros.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 # Inicializar extensões
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -45,8 +68,13 @@ class Usuario(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     nome_completo = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120))
-    tipo_usuario = db.Column(db.String(20), nullable=False, default='operador')
+    tipo_usuario = db.Column(
+        db.String(20),
+        nullable=False,
+        default='atendente'  # atendente, supervisor, administrador, contador
+    )
     ativo = db.Column(db.Boolean, nullable=False, default=True)
+    data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)  # 🆕 NOVO
     
     def check_password(self, password):
         try:
@@ -74,6 +102,22 @@ class Usuario(db.Model):
     
     def get_id(self):
         return str(self.id)
+    
+    # ===== PERMISSÕES ESPECÍFICAS =====
+    def is_contador(self):
+        return self.tipo_usuario == 'contador'
+
+    def can_manage_finances(self):
+        """Quem pode gerenciar finanças: contador e administrador"""
+        return self.tipo_usuario in ['contador', 'administrador']
+
+    def can_view_finances(self):
+        """Quem pode visualizar relatórios financeiros: contador, supervisor e administrador"""
+        return self.tipo_usuario in ['contador', 'supervisor', 'administrador']
+
+    def can_generate_invoices(self):
+        """Quem pode gerar faturas: apenas contador e administrador"""
+        return self.tipo_usuario in ['contador', 'administrador']
 
 class Paciente(db.Model):
     __tablename__ = 'pacientes'
@@ -109,8 +153,18 @@ class Veiculo(db.Model):
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     
+    # 🆕 CAMPOS DE CONTROLE FINANCEIRO
+    tipo_propriedade = db.Column(db.String(20), nullable=False, default='proprio')  # 'proprio' ou 'terceirizado'
+    proprietario_nome = db.Column(db.String(120))  # Nome do proprietário (se terceirizado)
+    proprietario_cpf_cnpj = db.Column(db.String(18))  # CPF/CNPJ do proprietário
+    proprietario_telefone = db.Column(db.String(15))  # Telefone do proprietário
+    valor_km = db.Column(db.Numeric(10, 2))  # Valor por KM rodado (terceirizados)
+    valor_diaria = db.Column(db.Numeric(10, 2))  # Valor da diária (terceirizados)
+    conta_bancaria = db.Column(db.String(100))  # Dados bancários para pagamento
+    
     # Relacionamentos
     agendamentos = db.relationship('Agendamento', backref='veiculo', lazy=True)
+    usos = db.relationship('UsoVeiculo', backref='veiculo', lazy=True)
 
 class Motorista(db.Model):
     __tablename__ = 'motoristas'
@@ -146,6 +200,140 @@ class Agendamento(db.Model):
     observacoes = db.Column(db.Text)
     status = db.Column(db.String(20), nullable=False, default='agendado')
     data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+
+
+class UsoVeiculo(db.Model):
+    __tablename__ = 'uso_veiculos'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    agendamento_id = db.Column(db.Integer, db.ForeignKey('agendamentos.id'), nullable=False)
+    veiculo_id = db.Column(db.Integer, db.ForeignKey('veiculos.id'), nullable=False)
+    motorista_id = db.Column(db.Integer, db.ForeignKey('motoristas.id'), nullable=False)
+    
+    # Dados do trajeto
+    data_uso = db.Column(db.Date, nullable=False)
+    hora_saida = db.Column(db.Time, nullable=False)
+    hora_retorno = db.Column(db.Time)
+    km_inicial = db.Column(db.Integer)  # Quilometragem inicial
+    km_final = db.Column(db.Integer)    # Quilometragem final
+    km_rodados = db.Column(db.Integer)  # Calculado automaticamente
+    
+    # Endereços
+    endereco_origem = db.Column(db.Text, nullable=False)
+    endereco_destino = db.Column(db.Text, nullable=False)
+    
+    # Dados financeiros (para terceirizados)
+    valor_km = db.Column(db.Numeric(10, 2))      # Valor por KM (na data do uso)
+    valor_diaria = db.Column(db.Numeric(10, 2))  # Valor da diária (na data do uso)
+    valor_total = db.Column(db.Numeric(10, 2))   # Valor total calculado
+    combustivel_valor = db.Column(db.Numeric(10, 2))  # Valor do combustível
+    
+    # Controle
+    status = db.Column(db.String(20), nullable=False, default='em_andamento')  # em_andamento, concluido, cancelado
+    observacoes = db.Column(db.Text)
+    data_cadastro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    
+    # Relacionamentos
+    agendamento = db.relationship('Agendamento', backref='uso_veiculo')
+    motorista = db.relationship('Motorista', backref='usos_motorista')
+    
+    
+    
+    
+    @property
+    def duracao_horas(self):
+        """Calcula duração em horas entre saída e retorno"""
+        if self.hora_saida and self.hora_retorno:
+            # Converter para datetime para calcular diferença
+            from datetime import datetime, timedelta
+            inicio = datetime.combine(self.data_uso, self.hora_saida)
+            fim = datetime.combine(self.data_uso, self.hora_retorno)
+            
+            # Se retorno for no dia seguinte
+            if fim < inicio:
+                fim += timedelta(days=1)
+            
+            diferenca = fim - inicio
+            return round(diferenca.total_seconds() / 3600, 2)  # Em horas
+        return 0
+    
+    def calcular_valor_total(self):
+        """Calcula valor total baseado no tipo de cobrança"""
+        if not self.veiculo:
+            return 0
+        
+        valor = 0
+        
+        # Se veículo é terceirizado, calcular valor
+        if self.veiculo.tipo_propriedade == 'terceirizado':
+            # Priorizar cobrança por KM se disponível
+            if self.km_rodados and self.valor_km:
+                valor = float(self.km_rodados) * float(self.valor_km)
+            elif self.valor_diaria:
+                # Cobrança por diária
+                valor = float(self.valor_diaria)
+        
+        # Adicionar combustível se houver
+        if self.combustivel_valor:
+            valor += float(self.combustivel_valor)
+        
+        self.valor_total = valor
+        return valor
+
+class FaturaTerceirizado(db.Model):
+    __tablename__ = 'faturas_terceirizados'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    veiculo_id = db.Column(db.Integer, db.ForeignKey('veiculos.id'), nullable=False)
+    
+    # Período da fatura
+    mes_referencia = db.Column(db.Integer, nullable=False)  # 1-12
+    ano_referencia = db.Column(db.Integer, nullable=False)  # 2024, 2025...
+    
+    # Valores
+    total_km = db.Column(db.Integer, default=0)
+    total_diarias = db.Column(db.Integer, default=0)
+    valor_km_total = db.Column(db.Numeric(10, 2), default=0)
+    valor_diarias_total = db.Column(db.Numeric(10, 2), default=0)
+    valor_combustivel = db.Column(db.Numeric(10, 2), default=0)
+    valor_total = db.Column(db.Numeric(10, 2), nullable=False, default=0)
+    
+    # Controle de pagamento
+    status = db.Column(db.String(20), nullable=False, default='pendente')  # pendente, pago, cancelado
+    data_vencimento = db.Column(db.Date)
+    data_pagamento = db.Column(db.Date)
+    numero_nota_fiscal = db.Column(db.String(50))
+    
+    # Observações
+    observacoes = db.Column(db.Text)
+    data_geracao = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    usuario_gerou_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'))
+    
+    # Relacionamentos
+    veiculo = db.relationship('Veiculo', backref='faturas')
+    usuario_gerou = db.relationship('Usuario', backref='faturas_geradas')
+    
+    @property
+    def periodo_referencia(self):
+        """Retorna período formatado (MM/AAAA)"""
+        return f"{self.mes_referencia:02d}/{self.ano_referencia}"
+    
+    def gerar_usos_periodo(self):
+        """Retorna lista de usos do veículo no período da fatura"""
+        from calendar import monthrange
+        
+        # Primeiro e último dia do mês
+        primeiro_dia = date(self.ano_referencia, self.mes_referencia, 1)
+        ultimo_dia_num = monthrange(self.ano_referencia, self.mes_referencia)[1]
+        ultimo_dia = date(self.ano_referencia, self.mes_referencia, ultimo_dia_num)
+        
+        return UsoVeiculo.query.filter(
+            UsoVeiculo.veiculo_id == self.veiculo_id,
+            UsoVeiculo.data_uso.between(primeiro_dia, ultimo_dia),
+            UsoVeiculo.status == 'concluido'
+        ).order_by(UsoVeiculo.data_uso).all()
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -333,7 +521,11 @@ def gerar_layout_base(titulo, conteudo, ativo=""):
             <a href="{url_for('motoristas')}" class="{'active' if ativo == 'motoristas' else ''}">👨‍💼 Motoristas</a>
             <a href="{url_for('agendamentos')}" class="{'active' if ativo == 'agendamentos' else ''}">📅 Agendamentos</a>
             <a href="{url_for('relatorios')}" class="{'active' if ativo == 'relatorios' else ''}">📊 Relatórios</a>
-        </div>
+            <a href="{url_for('uso_veiculos')}" class="{'active' if ativo == 'uso_veiculos' else ''}">🚗 Controle de Uso</a>
+            {'<a href="/faturamento" class="' + ('active' if ativo == 'faturamento' else '') + '">💰 Faturamento</a>' if current_user.is_authenticated and hasattr(current_user, "can_view_finances") and current_user.can_view_finances() else ''}
+            {'<a href="/usuarios" class="active" if ativo == "usuarios" else "">👥 Usuários</a>' if current_user.is_authenticated and hasattr(current_user, "tipo_usuario") and current_user.tipo_usuario == "administrador" else ''}
+        </div>   
+
         
         <div class="container">
             {conteudo}
@@ -2344,6 +2536,1117 @@ def create_app():
         session.pop('_flashes', None)
         flash('Logout realizado com sucesso!', 'success')
         return redirect(url_for('login'))
+    
+    # ===== GERENCIAMENTO DE USUÁRIOS =====
+    @app.route('/usuarios')
+    @login_required
+    def usuarios():
+        if not current_user.tipo_usuario == 'administrador':
+            flash('Acesso negado! Apenas administradores podem gerenciar usuários.', 'error')
+            return redirect(url_for('dashboard'))
+        
+        usuarios_lista = Usuario.query.order_by(Usuario.data_cadastro.desc()).all()
+        
+        usuarios_html = ""
+        if usuarios_lista:
+            usuarios_html = '''
+            <div class="card">
+                <h3 style="color: var(--primary-color); margin-bottom: 1rem;">👥 Usuários do Sistema</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: var(--color-95);">
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Nome</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Username</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Tipo</th>
+                                <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            '''
+            for usuario in usuarios_lista:
+                tipo_color = {
+                    'administrador': 'color: var(--danger-color); font-weight: bold;',
+                    'contador': 'color: var(--success-color); font-weight: bold;',
+                    'supervisor': 'color: var(--warning-color); font-weight: bold;',
+                    'atendente': 'color: var(--info-color);'
+                }.get(usuario.tipo_usuario, '')
+                
+                usuarios_html += f'''
+                            <tr>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{usuario.nome_completo}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);"><strong>{usuario.username}</strong></td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); {tipo_color}">{usuario.tipo_usuario.title()}</td>
+                                <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{'Ativo' if usuario.ativo else 'Inativo'}</td>
+                            </tr>
+                '''
+            usuarios_html += '''
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            '''
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>👥 Gerenciamento de Usuários</h2>
+            <p>Controle de acesso e permissões do sistema</p>
+            <div style="margin-top: 1rem;">
+                <a href="/usuarios/novo" class="btn">👤 Cadastrar Novo Usuário</a>
+            </div>
+        </div>
+        
+        {usuarios_html}
+        '''
+        return gerar_layout_base("Usuários", conteudo, "usuarios")
+
+    @app.route('/usuarios/novo', methods=['GET', 'POST'])
+    @login_required  
+    def usuarios_novo():
+        if not current_user.tipo_usuario == 'administrador':
+            flash('Acesso negado!', 'error')
+            return redirect(url_for('dashboard'))
+        
+        if request.method == 'POST':
+            try:
+                username = request.form.get('username', '').strip()
+                nome_completo = request.form.get('nome_completo', '').strip()
+                email = request.form.get('email', '').strip()
+                password = request.form.get('password', '').strip()
+                tipo_usuario = request.form.get('tipo_usuario', '').strip()
+                
+                if not all([username, nome_completo, password, tipo_usuario]):
+                    flash('Preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                if Usuario.query.filter_by(username=username).first():
+                    flash('Nome de usuário já existe!', 'error')
+                    return redirect(url_for('usuarios_novo'))
+                
+                usuario = Usuario(
+                    username=username,
+                    nome_completo=nome_completo,
+                    email=email if email else None,
+                    tipo_usuario=tipo_usuario
+                )
+                usuario.set_password(password)
+                
+                db.session.add(usuario)
+                db.session.commit()
+                
+                flash(f'Usuário "{nome_completo}" cadastrado com sucesso!', 'success')
+                return redirect(url_for('usuarios'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro: {str(e)}', 'error')
+        
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>👤 Cadastrar Novo Usuário</h2>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="username">Nome de Usuário *</label>
+                        <input type="text" id="username" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="nome_completo">Nome Completo *</label>
+                        <input type="text" id="nome_completo" name="nome_completo" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="email">E-mail</label>
+                        <input type="email" id="email" name="email">
+                    </div>
+                    <div class="form-group">
+                        <label for="tipo_usuario">Tipo de Usuário *</label>
+                        <select id="tipo_usuario" name="tipo_usuario" required>
+                            <option value="">Selecione...</option>
+                            <option value="atendente">🎧 Atendente - Operações básicas</option>
+                            <option value="supervisor">👨‍💼 Supervisor - Pode editar dados</option>
+                            <option value="contador">💰 Contador - Controle financeiro</option>
+                            <option value="administrador">👑 Administrador - Acesso total</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Senha *</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">👤 Criar Usuário</button>
+                    <a href="/usuarios" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Novo Usuário", conteudo, "usuarios")  
+    
+    
+    # ===== MÓDULO DE FATURAMENTO =====
+    @app.route('/faturamento')
+    @login_required
+    @finance_view_required
+    def faturamento():
+        # Buscar faturas existentes
+        faturas = FaturaTerceirizado.query.order_by(
+            FaturaTerceirizado.ano_referencia.desc(),
+            FaturaTerceirizado.mes_referencia.desc()
+        ).all()
+        
+        # Buscar veículos terceirizados
+        veiculos_terceirizados = Veiculo.query.filter_by(
+            tipo_propriedade='terceirizado',
+            ativo=True
+        ).all()
+        
+        # Preparar dados das faturas
+        faturas_dados = []
+        for fatura in faturas:
+            faturas_dados.append({
+                'id': fatura.id,
+                'veiculo_placa': fatura.veiculo.placa,
+                'proprietario': fatura.veiculo.proprietario_nome or 'Não informado',
+                'periodo': fatura.periodo_referencia,
+                'total_km': fatura.total_km,
+                'valor_total': float(fatura.valor_total) if fatura.valor_total else 0,
+                'status': fatura.status,
+                'data_vencimento': fatura.data_vencimento.strftime('%d/%m/%Y') if fatura.data_vencimento else '-',
+                'data_pagamento': fatura.data_pagamento.strftime('%d/%m/%Y') if fatura.data_pagamento else '-'
+            })
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>💰 Módulo de Faturamento</h2>
+            <p>Gestão financeira de veículos terceirizados</p>
+            <div style="margin-top: 1rem;">
+                <a href="/faturamento/gerar" class="btn btn-success">📋 Gerar Nova Fatura</a>
+            </div>
+        </div>
+        
+        <!-- Estatísticas -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--primary-color); margin: 0 0 0.5rem 0;">📋 Total de Faturas</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--text-color);">{len(faturas_dados)}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--warning-color); margin: 0 0 0.5rem 0;">⏳ Faturas Pendentes</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--warning-color);">{len([f for f in faturas_dados if f['status'] == 'pendente'])}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--success-color); margin: 0 0 0.5rem 0;">✅ Faturas Pagas</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--success-color);">{len([f for f in faturas_dados if f['status'] == 'pago'])}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--info-color); margin: 0 0 0.5rem 0;">🚗 Veículos Terceirizados</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--info-color);">{len(veiculos_terceirizados)}</div>
+            </div>
+        </div>
+        
+        <!-- Lista de Faturas -->
+        <div class="card">
+            <h3 style="color: var(--primary-color); margin-bottom: 1.5rem;">📋 Faturas de Terceirizados</h3>
+            
+            {'''
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: var(--color-95);">
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Veículo</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Proprietário</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Período</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Total KM</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Valor Total</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Vencimento</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            ''' + "".join([f'''
+                        <tr>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);"><strong>{fatura["veiculo_placa"]}</strong></td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{fatura["proprietario"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{fatura["periodo"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{fatura["total_km"]} km</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">R$ {fatura["valor_total"]:.2f}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                <span style="padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: bold; 
+                                      background: {'var(--success-color)' if fatura['status'] == 'pago' else 'var(--warning-color)' if fatura['status'] == 'pendente' else 'var(--danger-color)'}; 
+                                      color: white;">
+                                    {fatura["status"].upper()}
+                                </span>
+                            </td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{fatura["vencimento"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <a href="/faturamento/detalhes/{fatura['id']}" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">👁️ Ver</a>
+                                    {f'<a href="/faturamento/pagar/{fatura["id"]}" class="btn btn-success" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">💰 Pagar</a>' if fatura["status"] == "pendente" else ""}
+                                </div>
+                            </td>
+                        </tr>
+            ''' for fatura in faturas_dados]) + '''
+                    </tbody>
+                </table>
+            </div>
+            ''' if faturas_dados else '''
+            <div style="text-align: center; padding: 3rem;">
+                <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--primary-color);">💰</div>
+                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Nenhuma fatura gerada</h3>
+                <p style="color: var(--gray-color); margin-bottom: 2rem;">Comece gerando a primeira fatura de terceirizados!</p>
+                <a href="/faturamento/gerar" class="btn btn-success">📋 Gerar Nova Fatura</a>
+            </div>
+            '''}
+        </div>
+        '''
+        
+        return gerar_layout_base("Faturamento", conteudo, "faturamento")
+    
+    @app.route('/faturamento/gerar', methods=['GET', 'POST'])
+    @login_required
+    @contador_required
+    def faturamento_gerar():
+        if request.method == 'POST':
+            try:
+                veiculo_id = int(request.form.get('veiculo_id', 0))
+                mes_referencia = int(request.form.get('mes_referencia', 0))
+                ano_referencia = int(request.form.get('ano_referencia', 0))
+                data_vencimento_str = request.form.get('data_vencimento')
+                
+                if not all([veiculo_id, mes_referencia, ano_referencia]):
+                    flash('Preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('faturamento_gerar'))
+                
+                # Verificar se já existe fatura para este período
+                fatura_existente = FaturaTerceirizado.query.filter_by(
+                    veiculo_id=veiculo_id,
+                    mes_referencia=mes_referencia,
+                    ano_referencia=ano_referencia
+                ).first()
+                
+                if fatura_existente:
+                    flash('Já existe uma fatura para este veículo neste período!', 'error')
+                    return redirect(url_for('faturamento_gerar'))
+                
+                # Buscar usos do veículo no período
+                from calendar import monthrange
+                primeiro_dia = date(ano_referencia, mes_referencia, 1)
+                ultimo_dia_num = monthrange(ano_referencia, mes_referencia)[1]
+                ultimo_dia = date(ano_referencia, mes_referencia, ultimo_dia_num)
+                
+                usos = UsoVeiculo.query.filter(
+                    UsoVeiculo.veiculo_id == veiculo_id,
+                    UsoVeiculo.data_uso.between(primeiro_dia, ultimo_dia),
+                    UsoVeiculo.status == 'concluido'
+                ).all()
+                
+                # Calcular totais
+                total_km = sum([uso.km_rodados or 0 for uso in usos])
+                total_diarias = len(usos)
+                valor_total = sum([float(uso.valor_total or 0) for uso in usos])
+                
+                # Converter data de vencimento
+                data_vencimento = None
+                if data_vencimento_str:
+                    data_vencimento = datetime.strptime(data_vencimento_str, '%Y-%m-%d').date()
+                
+                # Criar nova fatura
+                fatura = FaturaTerceirizado(
+                    veiculo_id=veiculo_id,
+                    mes_referencia=mes_referencia,
+                    ano_referencia=ano_referencia,
+                    total_km=total_km,
+                    total_diarias=total_diarias,
+                    valor_total=valor_total,
+                    data_vencimento=data_vencimento,
+                    usuario_gerou_id=current_user.id
+                )
+                
+                db.session.add(fatura)
+                db.session.commit()
+                
+                flash(f'Fatura gerada com sucesso! Total: R$ {valor_total:.2f}', 'success')
+                return redirect(url_for('faturamento'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao gerar fatura: {str(e)}', 'error')
+        
+        # Buscar veículos terceirizados
+        veiculos_terceirizados = Veiculo.query.filter_by(
+            tipo_propriedade='terceirizado',
+            ativo=True
+        ).all()
+        
+        # Gerar options para veículos
+        veiculos_options = ""
+        for v in veiculos_terceirizados:
+            veiculos_options += f'<option value="{v.id}">{v.placa} - {v.proprietario_nome or "Proprietário não informado"}</option>'
+        
+        # Gerar options para meses
+        meses_options = ""
+        meses = [
+            (1, 'Janeiro'), (2, 'Fevereiro'), (3, 'Março'), (4, 'Abril'),
+            (5, 'Maio'), (6, 'Junho'), (7, 'Julho'), (8, 'Agosto'),
+            (9, 'Setembro'), (10, 'Outubro'), (11, 'Novembro'), (12, 'Dezembro')
+        ]
+        for num, nome in meses:
+            meses_options += f'<option value="{num}">{nome}</option>'
+        
+        # Gerar options para anos
+        ano_atual = datetime.now().year
+        anos_options = ""
+        for ano in range(ano_atual - 2, ano_atual + 2):
+            selected = "selected" if ano == ano_atual else ""
+            anos_options += f'<option value="{ano}" {selected}>{ano}</option>'
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('faturamento')}">Faturamento</a> > 
+            Gerar Nova Fatura
+        </div>
+        
+        <div class="page-header">
+            <h2>📋 Gerar Nova Fatura</h2>
+            <p>Gere uma fatura para um veículo terceirizado baseada nos usos do período</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="veiculo_id">Veículo Terceirizado *</label>
+                        <select id="veiculo_id" name="veiculo_id" required>
+                            <option value="">Selecione o veículo...</option>
+                            {veiculos_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mes_referencia">Mês de Referência *</label>
+                        <select id="mes_referencia" name="mes_referencia" required>
+                            <option value="">Selecione o mês...</option>
+                            {meses_options}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ano_referencia">Ano de Referência *</label>
+                        <select id="ano_referencia" name="ano_referencia" required>
+                            {anos_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="data_vencimento">Data de Vencimento</label>
+                        <input type="date" id="data_vencimento" name="data_vencimento">
+                    </div>
+                </div>
+                
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem; margin: 1rem 0;">
+                    <h4 style="color: var(--primary-color); margin-bottom: 0.5rem;">ℹ️ Como funciona:</h4>
+                    <p style="margin: 0;">O sistema irá buscar todos os usos registrados do veículo no período selecionado e calcular automaticamente:</p>
+                    <ul style="margin: 0.5rem 0 0 1rem;">
+                        <li>Total de quilômetros rodados</li>
+                        <li>Número de diárias utilizadas</li>
+                        <li>Valor total com base nos preços cadastrados</li>
+                    </ul>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">📋 Gerar Fatura</button>
+                    <a href="{url_for('faturamento')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Gerar Fatura", conteudo, "faturamento")
+    
+    @app.route('/faturamento/pagar/<int:fatura_id>')
+    @login_required
+    @contador_required
+    def faturamento_pagar(fatura_id):
+        try:
+            fatura = FaturaTerceirizado.query.get_or_404(fatura_id)
+            
+            if fatura.status == 'pago':
+                flash('Esta fatura já foi marcada como paga!', 'warning')
+                return redirect(url_for('faturamento'))
+            
+            # Marcar como paga
+            fatura.status = 'pago'
+            fatura.data_pagamento = date.today()
+            
+            db.session.commit()
+            
+            flash(f'Fatura de {fatura.veiculo.placa} ({fatura.periodo_referencia}) marcada como paga!', 'success')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Erro ao marcar fatura como paga: {str(e)}', 'error')
+        
+        return redirect(url_for('faturamento'))
+    
+    @app.route('/faturamento/detalhes/<int:fatura_id>')
+    @login_required
+    @finance_view_required
+    def faturamento_detalhes(fatura_id):
+        fatura = FaturaTerceirizado.query.get_or_404(fatura_id)
+        
+        # Buscar usos relacionados à fatura
+        usos = fatura.gerar_usos_periodo()
+        
+        usos_dados = []
+        for uso in usos:
+            usos_dados.append({
+                'data': uso.data_uso.strftime('%d/%m/%Y'),
+                'hora_saida': uso.hora_saida.strftime('%H:%M'),
+                'hora_retorno': uso.hora_retorno.strftime('%H:%M') if uso.hora_retorno else '-',
+                'origem': uso.endereco_origem,
+                'destino': uso.endereco_destino,
+                'km_rodados': uso.km_rodados or 0,
+                'valor_total': float(uso.valor_total or 0),
+                'motorista': uso.motorista.nome if uso.motorista else 'Não informado'
+            })
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('faturamento')}">Faturamento</a> > 
+            Detalhes da Fatura
+        </div>
+        
+        <div class="page-header">
+            <h2>📋 Detalhes da Fatura</h2>
+            <p>Fatura do veículo {fatura.veiculo.placa} - {fatura.periodo_referencia}</p>
+        </div>
+        
+        <!-- Informações da Fatura -->
+        <div class="card">
+            <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📄 Informações da Fatura</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>🚗 Veículo:</strong><br>
+                    {fatura.veiculo.placa} - {fatura.veiculo.marca} {fatura.veiculo.modelo}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>👤 Proprietário:</strong><br>
+                    {fatura.veiculo.proprietario_nome or 'Não informado'}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>📅 Período:</strong><br>
+                    {fatura.periodo_referencia}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>💰 Valor Total:</strong><br>
+                    <span style="font-size: 1.2rem; color: var(--success-color); font-weight: bold;">R$ {float(fatura.valor_total):.2f}</span>
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>📏 Total KM:</strong><br>
+                    {fatura.total_km} km
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>📊 Status:</strong><br>
+                    <span style="padding: 0.25rem 0.5rem; border-radius: 0.25rem; 
+                          background: {'var(--success-color)' if fatura.status == 'pago' else 'var(--warning-color)'}; 
+                          color: white; font-weight: bold;">
+                        {fatura.status.upper()}
+                    </span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Usos Detalhados -->
+        <div class="card">
+            <h3 style="color: var(--primary-color); margin-bottom: 1rem;">🚛 Usos do Veículo no Período</h3>
+            
+            {'''
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: var(--color-95);">
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Saída</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Retorno</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Origem</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Destino</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">KM</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Valor</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Motorista</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            ''' + "".join([f'''
+                        <tr>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["data"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["hora_saida"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["hora_retorno"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["origem"][:30]}{'...' if len(uso["origem"]) > 30 else ''}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["destino"][:30]}{'...' if len(uso["destino"]) > 30 else ''}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["km_rodados"]} km</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">R$ {uso["valor_total"]:.2f}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["motorista"]}</td>
+                        </tr>
+            ''' for uso in usos_dados]) + '''
+                    </tbody>
+                </table>
+            </div>
+            ''' if usos_dados else '''
+            <div style="text-align: center; padding: 2rem;">
+                <p style="color: var(--gray-color);">Nenhum uso registrado para este período.</p>
+            </div>
+            '''}
+        </div>
+        
+        <div style="margin-top: 2rem;">
+            <a href="{url_for('faturamento')}" class="btn btn-secondary">← Voltar para Faturamento</a>
+            {f'<a href="/faturamento/pagar/{fatura.id}" class="btn btn-success" style="margin-left: 1rem;">💰 Marcar como Paga</a>' if fatura.status == 'pendente' else ''}
+        </div>
+        '''
+        
+        return gerar_layout_base("Detalhes da Fatura", conteudo, "faturamento")
+    
+    # ===== SISTEMA DE CONTROLE DE USO DE VEÍCULOS =====
+    @app.route('/uso-veiculos')
+    @login_required
+    def uso_veiculos():
+        # Buscar usos em andamento e recentes
+        usos_em_andamento = UsoVeiculo.query.filter_by(status='em_andamento').order_by(UsoVeiculo.data_uso.desc()).all()
+        
+        # Buscar usos concluídos dos últimos 30 dias
+        data_limite = date.today() - timedelta(days=30)
+        usos_concluidos = UsoVeiculo.query.filter(
+            UsoVeiculo.status.in_(['concluido', 'cancelado']),
+            UsoVeiculo.data_uso >= data_limite
+        ).order_by(UsoVeiculo.data_uso.desc()).limit(50).all()
+        
+        # Preparar dados dos usos em andamento
+        usos_andamento_dados = []
+        for uso in usos_em_andamento:
+            usos_andamento_dados.append({
+                'id': uso.id,
+                'veiculo_placa': uso.veiculo.placa,
+                'motorista_nome': uso.motorista.nome,
+                'data_saida': uso.data_uso.strftime('%d/%m/%Y'),
+                'hora_saida': uso.hora_saida.strftime('%H:%M'),
+                'origem': uso.endereco_origem,
+                'destino': uso.endereco_destino,
+                'km_inicial': uso.km_inicial or 0,
+                'agendamento_paciente': uso.agendamento.paciente.nome if uso.agendamento else 'Sem agendamento'
+            })
+        
+        # Preparar dados dos usos concluídos
+        usos_concluidos_dados = []
+        for uso in usos_concluidos:
+            duracao = uso.duracao_horas if uso.hora_retorno else 0
+            usos_concluidos_dados.append({
+                'id': uso.id,
+                'veiculo_placa': uso.veiculo.placa,
+                'motorista_nome': uso.motorista.nome,
+                'data_uso': uso.data_uso.strftime('%d/%m/%Y'),
+                'hora_saida': uso.hora_saida.strftime('%H:%M'),
+                'hora_retorno': uso.hora_retorno.strftime('%H:%M') if uso.hora_retorno else '-',
+                'km_rodados': uso.km_rodados or 0,
+                'duracao': f"{duracao:.1f}h" if duracao > 0 else '-',
+                'valor_total': float(uso.valor_total or 0),
+                'status': uso.status,
+                'agendamento_paciente': uso.agendamento.paciente.nome if uso.agendamento else 'Sem agendamento'
+            })
+        
+        conteudo = f'''
+        <div class="page-header">
+            <h2>🚗 Controle de Uso de Veículos</h2>
+            <p>Registro e controle de saídas, retornos e custos da frota</p>
+            <div style="margin-top: 1rem;">
+                <a href="/uso-veiculos/iniciar" class="btn btn-success">🚦 Iniciar Uso de Veículo</a>
+                <a href="/uso-veiculos/relatorio" class="btn btn-secondary">📊 Relatório de Uso</a>
+            </div>
+        </div>
+        
+        <!-- Estatísticas -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--warning-color); margin: 0 0 0.5rem 0;">🚦 Em Andamento</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--warning-color);">{len(usos_andamento_dados)}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--success-color); margin: 0 0 0.5rem 0;">✅ Concluídos (30d)</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--success-color);">{len([u for u in usos_concluidos_dados if u['status'] == 'concluido'])}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--info-color); margin: 0 0 0.5rem 0;">📏 KM Total (30d)</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--info-color);">{sum([u['km_rodados'] for u in usos_concluidos_dados])}</div>
+            </div>
+            <div class="card" style="text-align: center; padding: 1.5rem;">
+                <h3 style="color: var(--primary-color); margin: 0 0 0.5rem 0;">💰 Custo Total (30d)</h3>
+                <div style="font-size: 2rem; font-weight: bold; color: var(--primary-color);">R$ {sum([u['valor_total'] for u in usos_concluidos_dados]):.2f}</div>
+            </div>
+        </div>
+        
+        <!-- Usos em Andamento -->
+        <div class="card">
+            <h3 style="color: var(--warning-color); margin-bottom: 1.5rem;">🚦 Veículos em Uso</h3>
+            
+            {'''
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: var(--color-95);">
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Veículo</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Motorista</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Paciente</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Saída</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Origem → Destino</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">KM Inicial</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            ''' + "".join([f'''
+                        <tr style="background: rgba(242, 130, 60, 0.1);">
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);"><strong>{uso["veiculo_placa"]}</strong></td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["motorista_nome"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["agendamento_paciente"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["data_saida"]} {uso["hora_saida"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color); font-size: 0.875rem;">{uso["origem"][:25]}{'...' if len(uso["origem"]) > 25 else ''} → {uso["destino"][:25]}{'...' if len(uso["destino"]) > 25 else ''}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["km_inicial"]} km</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <a href="/uso-veiculos/finalizar/{uso['id']}" class="btn btn-success" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">🏁 Finalizar</a>
+                                    <a href="/uso-veiculos/detalhes/{uso['id']}" class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">👁️ Ver</a>
+                                </div>
+                            </td>
+                        </tr>
+            ''' for uso in usos_andamento_dados]) + '''
+                    </tbody>
+                </table>
+            </div>
+            ''' if usos_andamento_dados else '''
+            <div style="text-align: center; padding: 2rem;">
+                <div style="font-size: 3rem; margin-bottom: 1rem; color: var(--success-color);">🎯</div>
+                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Nenhum veículo em uso</h3>
+                <p style="color: var(--gray-color);">Todos os veículos estão disponíveis</p>
+            </div>
+            '''}
+        </div>
+        
+        <!-- Usos Recentes -->
+        <div class="card">
+            <h3 style="color: var(--primary-color); margin-bottom: 1.5rem;">📋 Usos Recentes (Últimos 30 dias)</h3>
+            
+            {'''
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: var(--color-95);">
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Data</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Veículo</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Motorista</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Paciente</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Horário</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">KM</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Duração</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Custo</th>
+                            <th style="padding: 0.75rem; text-align: left; border-bottom: 2px solid var(--primary-color);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            ''' + "".join([f'''
+                        <tr>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["data_uso"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);"><strong>{uso["veiculo_placa"]}</strong></td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["motorista_nome"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["agendamento_paciente"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["hora_saida"]} - {uso["hora_retorno"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["km_rodados"]} km</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">{uso["duracao"]}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">R$ {uso["valor_total"]:.2f}</td>
+                            <td style="padding: 0.75rem; border-bottom: 1px solid var(--border-color);">
+                                <span style="padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: bold; 
+                                      background: {'var(--success-color)' if uso['status'] == 'concluido' else 'var(--danger-color)'}; 
+                                      color: white;">
+                                    {uso["status"].upper()}
+                                </span>
+                            </td>
+                        </tr>
+            ''' for uso in usos_concluidos_dados[:10]]) + '''
+                    </tbody>
+                </table>
+            </div>
+            ''' if usos_concluidos_dados else '''
+            <div style="text-align: center; padding: 2rem;">
+                <p style="color: var(--gray-color);">Nenhum uso registrado nos últimos 30 dias</p>
+            </div>
+            '''}
+            
+            {f'<div style="text-align: center; margin-top: 1rem;"><a href="/uso-veiculos/relatorio" class="btn">📊 Ver Relatório Completo</a></div>' if len(usos_concluidos_dados) > 10 else ''}
+        </div>
+        '''
+        
+        return gerar_layout_base("Controle de Uso", conteudo, "uso_veiculos")
+    
+    @app.route('/uso-veiculos/iniciar', methods=['GET', 'POST'])
+    @login_required
+    def uso_veiculos_iniciar():
+        if request.method == 'POST':
+            try:
+                agendamento_id = request.form.get('agendamento_id')
+                veiculo_id = int(request.form.get('veiculo_id', 0))
+                motorista_id = int(request.form.get('motorista_id', 0))
+                data_uso = request.form.get('data_uso')
+                hora_saida = request.form.get('hora_saida')
+                endereco_origem = request.form.get('endereco_origem', '').strip()
+                endereco_destino = request.form.get('endereco_destino', '').strip()
+                km_inicial = request.form.get('km_inicial')
+                observacoes = request.form.get('observacoes', '').strip()
+                
+                if not all([veiculo_id, motorista_id, data_uso, hora_saida, endereco_origem, endereco_destino]):
+                    flash('Preencha todos os campos obrigatórios!', 'error')
+                    return redirect(url_for('uso_veiculos_iniciar'))
+                
+                # Verificar se o veículo já está em uso
+                uso_existente = UsoVeiculo.query.filter_by(
+                    veiculo_id=veiculo_id,
+                    status='em_andamento'
+                ).first()
+                
+                if uso_existente:
+                    flash('Este veículo já está em uso!', 'error')
+                    return redirect(url_for('uso_veiculos_iniciar'))
+                
+                # Converter data e hora
+                data_uso = datetime.strptime(data_uso, '%Y-%m-%d').date()
+                hora_saida = datetime.strptime(hora_saida, '%H:%M').time()
+                
+                # Buscar valores do veículo (se terceirizado)
+                veiculo = Veiculo.query.get(veiculo_id)
+                valor_km = veiculo.valor_km if veiculo.tipo_propriedade == 'terceirizado' else None
+                valor_diaria = veiculo.valor_diaria if veiculo.tipo_propriedade == 'terceirizado' else None
+                
+                # Criar novo uso
+                uso = UsoVeiculo(
+                    agendamento_id=int(agendamento_id) if agendamento_id else None,
+                    veiculo_id=veiculo_id,
+                    motorista_id=motorista_id,
+                    data_uso=data_uso,
+                    hora_saida=hora_saida,
+                    endereco_origem=endereco_origem,
+                    endereco_destino=endereco_destino,
+                    km_inicial=int(km_inicial) if km_inicial else None,
+                    valor_km=valor_km,
+                    valor_diaria=valor_diaria,
+                    observacoes=observacoes if observacoes else None
+                )
+                
+                db.session.add(uso)
+                db.session.commit()
+                
+                flash(f'Uso do veículo {veiculo.placa} iniciado com sucesso!', 'success')
+                return redirect(url_for('uso_veiculos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao iniciar uso: {str(e)}', 'error')
+        
+        # Buscar agendamentos de hoje sem uso registrado
+        hoje = date.today()
+        agendamentos_disponiveis = Agendamento.query.filter(
+            Agendamento.data == hoje,
+            ~Agendamento.id.in_(
+                db.session.query(UsoVeiculo.agendamento_id).filter(UsoVeiculo.agendamento_id.isnot(None))
+            )
+        ).order_by(Agendamento.hora).all()
+        
+        # Buscar veículos disponíveis
+        veiculos_em_uso = db.session.query(UsoVeiculo.veiculo_id).filter_by(status='em_andamento').subquery()
+        veiculos_disponiveis = Veiculo.query.filter(
+            Veiculo.ativo == True,
+            ~Veiculo.id.in_(veiculos_em_uso)
+        ).order_by(Veiculo.placa).all()
+        
+        # Buscar motoristas disponíveis
+        motoristas_disponiveis = Motorista.query.filter_by(status='ativo').order_by(Motorista.nome).all()
+        
+        # Gerar options
+        agendamentos_options = ""
+        for ag in agendamentos_disponiveis:
+            agendamentos_options += f'<option value="{ag.id}" data-origem="{ag.origem}" data-destino="{ag.destino}">{ag.hora.strftime("%H:%M")} - {ag.paciente.nome} ({ag.tipo_transporte})</option>'
+        
+        veiculos_options = ""
+        for v in veiculos_disponiveis:
+            veiculos_options += f'<option value="{v.id}">{v.placa} - {v.marca} {v.modelo}</option>'
+        
+        motoristas_options = ""
+        for m in motoristas_disponiveis:
+            motoristas_options += f'<option value="{m.id}">{m.nome}</option>'
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('uso_veiculos')}">Controle de Uso</a> > 
+            Iniciar Uso
+        </div>
+        
+        <div class="page-header">
+            <h2>🚦 Iniciar Uso de Veículo</h2>
+            <p>Registre a saída de um veículo para transporte</p>
+        </div>
+        
+        {messages_html}
+        
+        <div class="card">
+            <form method="POST">
+                <div class="form-group">
+                    <label for="agendamento_id">Agendamento (Opcional)</label>
+                    <select id="agendamento_id" name="agendamento_id" onchange="preencherDadosAgendamento()">
+                        <option value="">Uso avulso (sem agendamento)</option>
+                        {agendamentos_options}
+                    </select>
+                    <small style="color: var(--gray-color);">Selecione um agendamento para preencher automaticamente origem e destino</small>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="veiculo_id">Veículo *</label>
+                        <select id="veiculo_id" name="veiculo_id" required>
+                            <option value="">Selecione o veículo...</option>
+                            {veiculos_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="motorista_id">Motorista *</label>
+                        <select id="motorista_id" name="motorista_id" required>
+                            <option value="">Selecione o motorista...</option>
+                            {motoristas_options}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="data_uso">Data de Uso *</label>
+                        <input type="date" id="data_uso" name="data_uso" value="{hoje.strftime('%Y-%m-%d')}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="hora_saida">Hora de Saída *</label>
+                        <input type="time" id="hora_saida" name="hora_saida" value="{datetime.now().strftime('%H:%M')}" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="endereco_origem">Endereço de Origem *</label>
+                    <input type="text" id="endereco_origem" name="endereco_origem" placeholder="De onde o veículo está saindo" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="endereco_destino">Endereço de Destino *</label>
+                    <input type="text" id="endereco_destino" name="endereco_destino" placeholder="Para onde o veículo está indo" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="km_inicial">Quilometragem Inicial</label>
+                    <input type="number" id="km_inicial" name="km_inicial" placeholder="Ex: 15000">
+                    <small style="color: var(--gray-color);">Quilometragem do odômetro na saída</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes">Observações</label>
+                    <textarea id="observacoes" name="observacoes" rows="3" placeholder="Informações adicionais sobre o uso"></textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">🚦 Iniciar Uso</button>
+                    <a href="{url_for('uso_veiculos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        
+        <script>
+            function preencherDadosAgendamento() {{
+                const select = document.getElementById('agendamento_id');
+                const option = select.options[select.selectedIndex];
+                
+                if (option.value) {{
+                    document.getElementById('endereco_origem').value = option.dataset.origem || '';
+                    document.getElementById('endereco_destino').value = option.dataset.destino || '';
+                }} else {{
+                    document.getElementById('endereco_origem').value = '';
+                    document.getElementById('endereco_destino').value = '';
+                }}
+            }}
+        </script>
+        '''
+        return gerar_layout_base("Iniciar Uso", conteudo, "uso_veiculos")
+    
+    @app.route('/uso-veiculos/finalizar/<int:uso_id>', methods=['GET', 'POST'])
+    @login_required
+    def uso_veiculos_finalizar(uso_id):
+        uso = UsoVeiculo.query.get_or_404(uso_id)
+        
+        if uso.status != 'em_andamento':
+            flash('Este uso já foi finalizado!', 'warning')
+            return redirect(url_for('uso_veiculos'))
+        
+        if request.method == 'POST':
+            try:
+                hora_retorno = request.form.get('hora_retorno')
+                km_final = request.form.get('km_final')
+                combustivel_valor = request.form.get('combustivel_valor')
+                observacoes_finalizacao = request.form.get('observacoes_finalizacao', '').strip()
+                
+                if not hora_retorno:
+                    flash('Hora de retorno é obrigatória!', 'error')
+                    return redirect(url_for('uso_veiculos_finalizar', uso_id=uso_id))
+                
+                # Converter hora
+                hora_retorno = datetime.strptime(hora_retorno, '%H:%M').time()
+                
+                # Atualizar uso
+                uso.hora_retorno = hora_retorno
+                uso.km_final = int(km_final) if km_final else None
+                uso.combustivel_valor = float(combustivel_valor) if combustivel_valor else None
+                uso.status = 'concluido'
+                
+                # Calcular KM rodados
+                if uso.km_inicial and uso.km_final:
+                    uso.km_rodados = uso.km_final - uso.km_inicial
+                
+                # Calcular valor total
+                uso.calcular_valor_total()
+                
+                # Adicionar observações
+                if observacoes_finalizacao:
+                    if uso.observacoes:
+                        uso.observacoes += f"\\n\\nFinalização: {observacoes_finalizacao}"
+                    else:
+                        uso.observacoes = f"Finalização: {observacoes_finalizacao}"
+                
+                db.session.commit()
+                
+                flash(f'Uso do veículo {uso.veiculo.placa} finalizado com sucesso!', 'success')
+                return redirect(url_for('uso_veiculos'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Erro ao finalizar uso: {str(e)}', 'error')
+        
+        # Gerar alertas de mensagens flash
+        messages_html = ""
+        for category, message in get_flashed_messages(with_categories=True):
+            alert_class = f"alert-{category}"
+            messages_html += f'<div class="alert {alert_class}">{message}</div>'
+        
+        conteudo = f'''
+        <div class="breadcrumb">
+            <a href="{url_for('dashboard')}">Dashboard</a> > 
+            <a href="{url_for('uso_veiculos')}">Controle de Uso</a> > 
+            Finalizar Uso
+        </div>
+        
+        <div class="page-header">
+            <h2>🏁 Finalizar Uso de Veículo</h2>
+            <p>Registre o retorno do veículo {uso.veiculo.placa}</p>
+        </div>
+        
+        {messages_html}
+        
+        <!-- Informações do Uso -->
+        <div class="card">
+            <h3 style="color: var(--primary-color); margin-bottom: 1rem;">📄 Informações do Uso</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>🚗 Veículo:</strong><br>
+                    {uso.veiculo.placa} - {uso.veiculo.marca} {uso.veiculo.modelo}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>👨‍💼 Motorista:</strong><br>
+                    {uso.motorista.nome}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>📅 Data/Hora Saída:</strong><br>
+                    {uso.data_uso.strftime('%d/%m/%Y')} às {uso.hora_saida.strftime('%H:%M')}
+                </div>
+                <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem;">
+                    <strong>📏 KM Inicial:</strong><br>
+                    {uso.km_inicial or 'Não informado'} km
+                </div>
+            </div>
+            
+            <div style="background: var(--color-95); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                <strong>🗺️ Trajeto:</strong><br>
+                <strong>Origem:</strong> {uso.endereco_origem}<br>
+                <strong>Destino:</strong> {uso.endereco_destino}
+            </div>
+        </div>
+        
+        <!-- Formulário de Finalização -->
+        <div class="card">
+            <h3 style="color: var(--success-color); margin-bottom: 1rem;">🏁 Dados de Retorno</h3>
+            
+            <form method="POST">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="hora_retorno">Hora de Retorno *</label>
+                        <input type="time" id="hora_retorno" name="hora_retorno" value="{datetime.now().strftime('%H:%M')}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="km_final">Quilometragem Final</label>
+                        <input type="number" id="km_final" name="km_final" placeholder="Ex: 15050" min="{uso.km_inicial or 0}">
+                        <small style="color: var(--gray-color);">Quilometragem do odômetro no retorno</small>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="combustivel_valor">Valor do Combustível (R$)</label>
+                    <input type="number" id="combustivel_valor" name="combustivel_valor" step="0.01" placeholder="Ex: 50.00">
+                    <small style="color: var(--gray-color);">Valor gasto com combustível durante o uso</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="observacoes_finalizacao">Observações da Finalização</label>
+                    <textarea id="observacoes_finalizacao" name="observacoes_finalizacao" rows="3" placeholder="Problemas encontrados, observações sobre o retorno, etc."></textarea>
+                </div>
+                
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-success">🏁 Finalizar Uso</button>
+                    <a href="{url_for('uso_veiculos')}" class="btn btn-secondary" style="margin-left: 1rem;">❌ Cancelar</a>
+                </div>
+            </form>
+        </div>
+        '''
+        return gerar_layout_base("Finalizar Uso", conteudo, "uso_veiculos")
+    
     
     return app
 

@@ -364,3 +364,20 @@ Execute o novo código e teste clicando em qualquer botão cinza! 🚀
 📋 Tabelas organizadas com dados reais
 🎨 Mensagens de sucesso/erro
 🧭 Navegação intuitiva com breadcrumbs
+
+
+
+
+PERMISSÕES DE ACESSO:
+💰 Faturamento:
+👁️ Visualizar: Contador, Supervisor, Administrador
+✏️ Gerar/Pagar: Contador, Administrador
+
+
+Nome de Usuário: contador
+Nome Completo: Contador do Sistema
+E-mail: contador@cosmopolis.sp.gov.br
+Senha: contador123
+Tipo de Usuário: 💰 Contador - Controle financeiro
+
+
